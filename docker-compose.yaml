@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+      - .env.secrets
+    ports:
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    environment:
+      - DB_DSN=${DB_DSN}
+      - REDIS_ADDR=${REDIS_ADDR}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:${POSTGRES_VERSION}
+    env_file:
+      - .env
+      - .env.secrets
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+    ports:
+      - "${DB_PORT}:${DB_PORT}"
+    command: ["postgres", "-p", "${DB_PORT}"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -p ${DB_PORT}"]
+      interval: ${HEALTHCHECK_INTERVAL}
+      timeout: ${HEALTHCHECK_TIMEOUT}
+      retries: ${HEALTHCHECK_RETRIES}
+
+  redis:
+    image: redis:${REDIS_VERSION}
+    env_file:
+      - .env
+    ports:
+      - "${REDIS_PORT}:${REDIS_PORT}"
+    command: ["redis-server", "--port", "${REDIS_PORT}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "${REDIS_PORT}", "ping"]
+      interval: ${HEALTHCHECK_INTERVAL}
+      timeout: ${HEALTHCHECK_TIMEOUT}
+      retries: ${HEALTHCHECK_RETRIES}
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION}
+    env_file:
+      - .env
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--web.listen-address=:${PROMETHEUS_PORT}'
+    ports:
+      - "${PROMETHEUS_PORT}:${PROMETHEUS_PORT}"
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION}
+    env_file:
+      - .env
+    environment:
+      - GF_SERVER_HTTP_PORT=${GRAFANA_PORT}
+    ports:
+      - "${GRAFANA_PORT}:${GRAFANA_PORT}"
+    depends_on:
+      - prometheus
