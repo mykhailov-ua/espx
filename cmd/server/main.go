@@ -116,14 +116,31 @@ func main() {
 
 	slog.Info("shutting down server...")
 	
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 1. Stop accepting new HTTP requests
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server shutdown failed", "error", err)
 	}
 	
-	cancel() // Stop workers and flush buffers
-	time.Sleep(1 * time.Second) // Small delay to let workers finish flushing
+	// 2. Signal background workers to flush and stop
+	cancel() 
+
+	// 3. Wait for workers to finish
+	done := make(chan struct{})
+	go func() {
+		eventProc.Wait()
+		statsAgg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		slog.Info("workers stopped gracefully")
+	case <-shutdownCtx.Done():
+		slog.Error("shutdown timeout exceeded, forcing exit")
+	}
+
 	slog.Info("server stopped")
 }

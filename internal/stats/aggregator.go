@@ -13,6 +13,12 @@ import (
 )
 
 const (
+	maxRetries    = 3
+	initialWait   = 100 * time.Millisecond
+	maxWait       = 2 * time.Second
+)
+
+const (
 	// CampaignTTL defines how long we keep a campaign in memory without activity
 	CampaignTTL = 2 * time.Hour
 	// MaxWorkers defines concurrent database writers for stats
@@ -38,6 +44,7 @@ type Aggregator struct {
 	data     sync.Map // map[uuid.UUID]*Counters
 	flushInt time.Duration
 	tasks    chan flushTask
+	wg       sync.WaitGroup
 }
 
 func NewAggregator(repo db.Querier, flushInt time.Duration) *Aggregator {
@@ -70,36 +77,70 @@ func (a *Aggregator) Increment(campaignID uuid.UUID, eventType string) {
 func (a *Aggregator) Start(ctx context.Context) {
 	// Start worker pool
 	for i := 0; i < MaxWorkers; i++ {
-		go a.worker(ctx)
+		a.wg.Add(1)
+		go a.worker()
 	}
 
+	a.wg.Add(1)
 	go func() {
+		defer a.wg.Done()
 		ticker := time.NewTicker(a.flushInt)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ctx.Done():
-				a.flush(context.Background())
+				a.flush(true)
+				close(a.tasks)
 				return
 			case <-ticker.C:
-				a.flush(ctx)
+				a.flush(false)
 			}
 		}
 	}()
 }
 
-func (a *Aggregator) worker(ctx context.Context) {
+func (a *Aggregator) worker() {
+	defer a.wg.Done()
 	for task := range a.tasks {
-		err := a.repo.UpdateCampaignStats(ctx, db.UpdateCampaignStatsParams{
-			CampaignID:       pgtype.UUID{Bytes: task.campaignID, Valid: true},
-			ImpressionsCount: task.imps,
-			ClicksCount:      task.clicks,
-			ConversionsCount: task.convs,
-		})
+		var err error
+		waitTime := initialWait
+
+		for i := 0; i <= maxRetries; i++ {
+			dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err = a.repo.UpdateCampaignStats(dbCtx, db.UpdateCampaignStatsParams{
+				CampaignID:       pgtype.UUID{Bytes: task.campaignID, Valid: true},
+				ImpressionsCount: task.imps,
+				ClicksCount:      task.clicks,
+				ConversionsCount: task.convs,
+			})
+			cancel()
+
+			if err == nil {
+				if i > 0 {
+					slog.Info("successfully updated campaign stats after retry", 
+						"campaign_id", task.campaignID, 
+						"attempts", i+1)
+				}
+				break
+			}
+
+			if i < maxRetries {
+				slog.Warn("failed to update campaign stats, retrying...",
+					"campaign_id", task.campaignID,
+					"error", err,
+					"attempt", i+1,
+					"wait", waitTime)
+				time.Sleep(waitTime)
+				waitTime *= 2
+				if waitTime > maxWait {
+					waitTime = maxWait
+				}
+			}
+		}
 
 		if err != nil {
-			slog.Error("failed to update campaign stats", 
+			slog.Error("all retries failed for campaign stats, data lost", 
 				"campaign_id", task.campaignID, 
 				"error", err,
 			)
@@ -107,7 +148,11 @@ func (a *Aggregator) worker(ctx context.Context) {
 	}
 }
 
-func (a *Aggregator) flush(ctx context.Context) {
+func (a *Aggregator) Wait() {
+	a.wg.Wait()
+}
+
+func (a *Aggregator) flush(isShutdown bool) {
 	now := time.Now().Unix()
 	ttlThreshold := int64(CampaignTTL.Seconds())
 
@@ -134,17 +179,15 @@ func (a *Aggregator) flush(ctx context.Context) {
 			return true
 		}
 
-		// 3. Offload DB write to worker pool (non-blocking)
-		select {
-		case a.tasks <- flushTask{
+		task := flushTask{
 			campaignID: campaignID,
 			imps:       impressions,
 			clicks:     clicks,
 			convs:      conversions,
-		}:
-		default:
-			slog.Warn("stats task queue is full, dropping stats", "campaign_id", campaignID)
 		}
+
+		// 3. Offload DB write to worker pool (blocking to provide backpressure)
+		a.tasks <- task
 
 		return true
 	})

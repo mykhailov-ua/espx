@@ -4,12 +4,19 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+const (
+	maxRetries    = 3
+	initialWait   = 100 * time.Millisecond
+	maxWait       = 2 * time.Second
 )
 
 type Event struct {
@@ -26,6 +33,7 @@ type Processor struct {
 	ch        chan Event
 	batchSize int
 	flushInt  time.Duration
+	wg        sync.WaitGroup
 }
 
 func NewProcessor(pool *pgxpool.Pool, batchSize int, flushInt time.Duration) *Processor {
@@ -56,7 +64,9 @@ func (p *Processor) Process(evt Event) error {
 }
 
 func (p *Processor) Start(ctx context.Context) {
+	p.wg.Add(1)
 	go func() {
+		defer p.wg.Done()
 		batch := make([]Event, 0, p.batchSize)
 		ticker := time.NewTicker(p.flushInt)
 		defer ticker.Stop()
@@ -64,7 +74,23 @@ func (p *Processor) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				p.flush(batch)
+				// Drain the channel
+			drainLoop:
+				for {
+					select {
+					case evt := <-p.ch:
+						batch = append(batch, evt)
+						if len(batch) >= p.batchSize {
+							p.flush(batch)
+							p.clearBatch(&batch)
+						}
+					default:
+						break drainLoop
+					}
+				}
+				if len(batch) > 0 {
+					p.flush(batch)
+				}
 				return
 			case evt := <-p.ch:
 				batch = append(batch, evt)
@@ -81,6 +107,10 @@ func (p *Processor) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (p *Processor) Wait() {
+	p.wg.Wait()
 }
 
 func (p *Processor) clearBatch(batch *[]Event) {
@@ -126,24 +156,46 @@ func (p *Processor) flush(batch []Event) {
 		return
 	}
 
-	// Use custom CopyFromSource to avoid allocating O(N) slices for [][]interface{}
-	source := &eventCopySource{
-		rows: batch,
-		idx:  -1,
-		now:  time.Now(),
-		row:  make([]any, 7),
+	var err error
+	waitTime := initialWait
+
+	for i := 0; i <= maxRetries; i++ {
+		// Re-create source for each attempt to reset iterator
+		source := &eventCopySource{
+			rows: batch,
+			idx:  -1,
+			now:  time.Now(),
+			row:  make([]any, 7),
+		}
+
+		_, err = p.pool.CopyFrom(
+			context.Background(),
+			pgx.Identifier{"events"},
+			[]string{"id", "campaign_id", "event_type", "payload", "ip_address", "user_agent", "created_at"},
+			source,
+		)
+
+		if err == nil {
+			if i > 0 {
+				slog.Info("successfully flushed event batch after retry", "attempts", i+1, "size", len(batch))
+			}
+			return
+		}
+
+		if i < maxRetries {
+			slog.Warn("failed to flush event batch, retrying...",
+				"error", err,
+				"attempt", i+1,
+				"wait", waitTime,
+				"size", len(batch),
+			)
+			time.Sleep(waitTime)
+			waitTime *= 2
+			if waitTime > maxWait {
+				waitTime = maxWait
+			}
+		}
 	}
 
-	_, err := p.pool.CopyFrom(
-		context.Background(),
-		pgx.Identifier{"events"},
-		[]string{"id", "campaign_id", "event_type", "payload", "ip_address", "user_agent", "created_at"},
-		source,
-	)
-
-	if err != nil {
-		slog.Error("failed to flush event batch", "error", err, "size", len(batch))
-	} else {
-		slog.Debug("flushed event batch", "size", len(batch))
-	}
+	slog.Error("all retries failed for event batch, data lost", "error", err, "size", len(batch))
 }
