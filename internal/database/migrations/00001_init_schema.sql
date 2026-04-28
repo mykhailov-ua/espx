@@ -10,14 +10,15 @@ CREATE TABLE campaigns (
 );
 
 CREATE TABLE events (
-    id UUID PRIMARY KEY,
-    campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-    event_type TEXT NOT NULL, -- 'impression', 'click', 'conversion'
+    id UUID NOT NULL,
+    campaign_id UUID NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN ('impression', 'click', 'conversion')),
     payload JSONB NOT NULL DEFAULT '{}',
     ip_address TEXT,
     user_agent TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
 
 CREATE TABLE campaign_stats (
     campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -30,7 +31,7 @@ CREATE TABLE campaign_stats (
 
 -- Performance indexes
 CREATE INDEX idx_events_campaign_id ON events(campaign_id);
-CREATE INDEX idx_events_created_at ON events(created_at);
+CREATE INDEX idx_campaigns_status_active ON campaigns(status) WHERE status = 'active';
 -- +goose StatementEnd
 
 -- +goose Down
