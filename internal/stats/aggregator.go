@@ -19,17 +19,14 @@ const (
 )
 
 const (
-	// CampaignTTL defines how long we keep a campaign in memory without activity
 	CampaignTTL = 2 * time.Hour
-	// MaxWorkers defines concurrent database writers for stats
-	MaxWorkers = 10
 )
 
 type Counters struct {
 	Impressions atomic.Int64
 	Clicks      atomic.Int64
 	Conversions atomic.Int64
-	LastSeen    atomic.Int64 // Unix timestamp
+	LastSeen    atomic.Int64
 }
 
 type flushTask struct {
@@ -41,17 +38,19 @@ type flushTask struct {
 
 type Aggregator struct {
 	repo     db.Querier
-	data     sync.Map // map[uuid.UUID]*Counters
+	data     sync.Map
 	flushInt time.Duration
-	tasks    chan flushTask
-	wg       sync.WaitGroup
+	tasks      chan flushTask
+	maxWorkers int
+	wg         sync.WaitGroup
 }
 
-func NewAggregator(repo db.Querier, flushInt time.Duration) *Aggregator {
+func NewAggregator(repo db.Querier, flushInt time.Duration, maxWorkers int) *Aggregator {
 	return &Aggregator{
-		repo:     repo,
-		flushInt: flushInt,
-		tasks:    make(chan flushTask, 5000), // Buffered channel for worker pool
+		repo:       repo,
+		flushInt:   flushInt,
+		tasks:      make(chan flushTask, 5000),
+		maxWorkers: maxWorkers,
 	}
 }
 
@@ -75,8 +74,7 @@ func (a *Aggregator) Increment(campaignID uuid.UUID, eventType string) {
 }
 
 func (a *Aggregator) Start(ctx context.Context) {
-	// Start worker pool
-	for i := 0; i < MaxWorkers; i++ {
+	for i := 0; i < a.maxWorkers; i++ {
 		a.wg.Add(1)
 		go a.worker()
 	}
@@ -102,50 +100,94 @@ func (a *Aggregator) Start(ctx context.Context) {
 
 func (a *Aggregator) worker() {
 	defer a.wg.Done()
-	for task := range a.tasks {
-		var err error
-		waitTime := initialWait
+	
+	const batchSize = 1000
+	const maxWait = 100 * time.Millisecond
+	
+	batch := make([]flushTask, 0, batchSize)
+	timer := time.NewTimer(maxWait)
+	defer timer.Stop()
 
-		for i := 0; i <= maxRetries; i++ {
-			dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			err = a.repo.UpdateCampaignStats(dbCtx, db.UpdateCampaignStatsParams{
-				CampaignID:       pgtype.UUID{Bytes: task.campaignID, Valid: true},
-				ImpressionsCount: task.imps,
-				ClicksCount:      task.clicks,
-				ConversionsCount: task.convs,
-			})
-			cancel()
-
-			if err == nil {
-				if i > 0 {
-					slog.Info("successfully updated campaign stats after retry", 
-						"campaign_id", task.campaignID, 
-						"attempts", i+1)
-				}
-				break
-			}
-
-			if i < maxRetries {
-				slog.Warn("failed to update campaign stats, retrying...",
-					"campaign_id", task.campaignID,
-					"error", err,
-					"attempt", i+1,
-					"wait", waitTime)
-				time.Sleep(waitTime)
-				waitTime *= 2
-				if waitTime > maxWait {
-					waitTime = maxWait
-				}
-			}
+	flush := func() {
+		if len(batch) == 0 {
+			return
 		}
+		a.doBatchFlush(batch)
+		batch = batch[:0]
+	}
 
-		if err != nil {
-			slog.Error("all retries failed for campaign stats, data lost", 
-				"campaign_id", task.campaignID, 
-				"error", err,
-			)
+	for {
+		select {
+		case task, ok := <-a.tasks:
+			if !ok {
+				flush()
+				return
+			}
+			batch = append(batch, task)
+			if len(batch) >= batchSize {
+				flush()
+				timer.Reset(maxWait)
+			}
+		case <-timer.C:
+			flush()
+			timer.Reset(maxWait)
 		}
 	}
+}
+
+func (a *Aggregator) doBatchFlush(batch []flushTask) {
+	campaignIDs := make([]pgtype.UUID, len(batch))
+	imps := make([]int64, len(batch))
+	clicks := make([]int64, len(batch))
+	convs := make([]int64, len(batch))
+
+	for i, t := range batch {
+		campaignIDs[i] = pgtype.UUID{Bytes: t.campaignID, Valid: true}
+		imps[i] = t.imps
+		clicks[i] = t.clicks
+		convs[i] = t.convs
+	}
+
+	var err error
+	waitTime := initialWait
+
+	for i := 0; i <= maxRetries; i++ {
+		dbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = a.repo.UpdateCampaignStatsBatch(dbCtx, db.UpdateCampaignStatsBatchParams{
+			CampaignIds: campaignIDs,
+			Impressions: imps,
+			Clicks:      clicks,
+			Conversions: convs,
+		})
+		cancel()
+
+		if err == nil {
+			if i > 0 {
+				slog.Info("successfully updated campaign stats batch after retry", 
+					"size", len(batch), 
+					"attempts", i+1)
+			}
+			return
+		}
+
+		if i < maxRetries {
+			slog.Warn("failed to update campaign stats batch, retrying...",
+				"size", len(batch),
+				"error", err,
+				"attempt", i+1,
+				"wait", waitTime)
+			time.Sleep(waitTime)
+			waitTime *= 2
+			if waitTime > maxWait {
+				waitTime = maxWait
+			}
+		}
+	}
+
+	slog.Error("all retries failed for campaign stats batch, data lost", 
+		"size", len(batch), 
+		"error", err,
+	)
 }
 
 func (a *Aggregator) Wait() {
@@ -160,17 +202,14 @@ func (a *Aggregator) flush(isShutdown bool) {
 		campaignID := key.(uuid.UUID)
 		c := value.(*Counters)
 
-		// 1. Memory Leak protection: Check TTL
 		lastSeen := c.LastSeen.Load()
 		if now-lastSeen > ttlThreshold {
-			// Double check if there are pending stats before deleting
 			if c.Impressions.Load() == 0 && c.Clicks.Load() == 0 && c.Conversions.Load() == 0 {
 				a.data.Delete(key)
 				return true
 			}
 		}
 
-		// 2. Atomic swap for thread-safe counters reset
 		impressions := c.Impressions.Swap(0)
 		clicks := c.Clicks.Swap(0)
 		conversions := c.Conversions.Swap(0)
@@ -186,7 +225,6 @@ func (a *Aggregator) flush(isShutdown bool) {
 			convs:      conversions,
 		}
 
-		// 3. Offload DB write to worker pool (blocking to provide backpressure)
 		a.tasks <- task
 
 		return true
