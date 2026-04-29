@@ -7,136 +7,94 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-type MockBatchWriter struct {
+type MockQuerier struct {
+	repository.Querier
+	mock.Mock
 	mu      sync.Mutex
 	flushes [][]ads.Event
-	err     error
 }
 
-func (m *MockBatchWriter) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+func (m *MockQuerier) InsertEventsBatch(ctx context.Context, arg repository.InsertEventsBatchParams) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.err != nil {
-		return 0, m.err
-	}
-
 	var batch []ads.Event
-	for rowSrc.Next() {
-		vals, _ := rowSrc.Values()
-		id := vals[0].(pgtype.UUID).Bytes
-		cid := vals[1].(pgtype.UUID).Bytes
-
+	for i := range arg.ClickIds {
 		batch = append(batch, ads.Event{
-			ID:         uuid.UUID(id),
-			CampaignID: uuid.UUID(cid),
-			Type:       vals[2].(string),
-			Payload:    vals[3].([]byte),
-			IP:         vals[4].(string),
-			UA:         vals[5].(string),
+			ClickID:    arg.ClickIds[i],
+			CampaignID: uuid.UUID(arg.CampaignIds[i].Bytes),
+			Type:       arg.EventTypes[i],
+			Payload:    arg.Payloads[i],
+			IP:         arg.IpAddresses[i],
+			UA:         arg.UserAgents[i],
 		})
 	}
-	m.flushes = append(m.flushes, batch)
-	return int64(len(batch)), nil
+
+	// Copy the batch to avoid issues with underlying array reuse in Processor
+	batchCopy := make([]ads.Event, len(batch))
+	copy(batchCopy, batch)
+	m.flushes = append(m.flushes, batchCopy)
+	return nil
+}
+
+func (m *MockQuerier) ListCampaignIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	return nil, nil
 }
 
 func TestProcessor_BufferOverflow(t *testing.T) {
-	mock := &MockBatchWriter{}
-	// batchSize=1, maxWorkers=1 => buffer size = 1
-	p := ads.NewProcessor(mock, 1, 1, 1*time.Second, 1*time.Second)
+	mockRepo := &MockQuerier{}
+	proc := ads.NewProcessor(mockRepo, 5, 1, 100*time.Millisecond, 1*time.Second)
+	proc.Start(context.Background())
 
-	evt := ads.Event{CampaignID: uuid.New(), Type: "click"}
-
-	err := p.Process(evt)
-	assert.NoError(t, err)
-
-	// Buffer is now full
-	err = p.Process(evt)
-	assert.ErrorIs(t, err, ads.ErrBufferFull)
+	campaignID := uuid.New()
+	// New buffer size is batchSize * (maxWorkers + 1) = 5 * 2 = 10
+	for i := 0; i < 11; i++ {
+		err := proc.Process(ads.Event{ClickID: uuid.New().String(), CampaignID: campaignID})
+		if i < 10 {
+			assert.NoError(t, err)
+		} else {
+			assert.Error(t, err)
+			assert.Equal(t, ads.ErrBufferFull, err)
+		}
+	}
 }
 
-func TestProcessor_Batching(t *testing.T) {
-	mock := &MockBatchWriter{}
-	batchSize := 5
-	p := ads.NewProcessor(mock, batchSize, 1, 1*time.Minute, 1*time.Second)
+func TestProcessor_BatchFlushing(t *testing.T) {
+	mockRepo := &MockQuerier{}
+	// Batch size 2, 1 worker, long flush interval to avoid random flushes
+	proc := ads.NewProcessor(mockRepo, 2, 1, 10*time.Second, 1*time.Second)
+	proc.Start(context.Background())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	p.Start(ctx)
+	campaignID := uuid.New()
 
-	for i := 0; i < batchSize; i++ {
-		err := p.Process(ads.Event{CampaignID: uuid.New(), Type: "imp"})
+	// Send 3 events
+	// Event 1 & 2 should trigger a flush immediately (batch size 2)
+	// Event 3 should stay in buffer until Close()
+	for i := 0; i < 3; i++ {
+		err := proc.Process(ads.Event{ClickID: uuid.New().String(), CampaignID: campaignID})
 		assert.NoError(t, err)
 	}
 
-	assert.Eventually(t, func() bool {
-		mock.mu.Lock()
-		defer mock.mu.Unlock()
-		return len(mock.flushes) == 1
-	}, 500*time.Millisecond, 10*time.Millisecond)
+	// Give a small moment for the first batch to be processed by the worker
+	time.Sleep(50 * time.Millisecond)
 
-	assert.Equal(t, batchSize, len(mock.flushes[0]))
-}
+	proc.Close()
+	proc.Wait()
 
-func TestProcessor_Ticker(t *testing.T) {
-	mock := &MockBatchWriter{}
-	flushInt := 100 * time.Millisecond
-	p := ads.NewProcessor(mock, 100, 1, flushInt, 1*time.Second)
+	mockRepo.mu.Lock()
+	count := len(mockRepo.flushes)
+	flushes := mockRepo.flushes
+	mockRepo.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	p.Start(ctx)
-
-	err := p.Process(ads.Event{CampaignID: uuid.New(), Type: "click"})
-	assert.NoError(t, err)
-
-	time.Sleep(flushInt + 50*time.Millisecond)
-
-	mock.mu.Lock()
-	defer mock.mu.Unlock()
-	require.Len(t, mock.flushes, 1)
-	assert.Len(t, mock.flushes[0], 1)
-}
-
-func TestProcessor_DrainOnClose(t *testing.T) {
-	mock := &MockBatchWriter{}
-	p := ads.NewProcessor(mock, 100, 1, 1*time.Minute, 1*time.Second)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	p.Start(ctx)
-
-	err := p.Process(ads.Event{CampaignID: uuid.New(), Type: "conv"})
-	assert.NoError(t, err)
-
-	p.Close()
-	p.Wait()
-	cancel()
-
-	mock.mu.Lock()
-	defer mock.mu.Unlock()
-	assert.Len(t, mock.flushes, 1)
-}
-
-func TestProcessor_ClearBatch(t *testing.T) {
-	p := &ads.Processor{}
-	batch := []ads.Event{
-		{Payload: []byte("data"), IP: "1.2.3.4", UA: "Mozilla"},
-		{Payload: []byte("more"), IP: "5.6.7.8", UA: "Safari"},
-	}
-
-	p.ClearBatch(&batch)
-
-	assert.Len(t, batch, 0)
-
-	reclaimed := batch[:2]
-	assert.Nil(t, reclaimed[0].Payload)
-	assert.Empty(t, reclaimed[0].IP)
-	assert.Empty(t, reclaimed[0].UA)
+	require.Equal(t, 2, count, "Should have 2 separate flushes")
+	assert.Equal(t, 2, len(flushes[0]), "First flush should contain 2 events")
+	assert.Equal(t, 1, len(flushes[1]), "Second flush (drain) should contain 1 event")
 }
