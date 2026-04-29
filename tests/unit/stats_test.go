@@ -49,7 +49,7 @@ func TestAggregator_Flow(t *testing.T) {
 	}, 500*time.Millisecond, 10*time.Millisecond)
 
 	cancel()
-	agg.Wait()
+	agg.Stop()
 
 	// Verify totals across all updates
 	var totalImps, totalClicks, totalConvs int64

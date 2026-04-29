@@ -88,37 +88,34 @@ func main() {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
-
-	slog.Info("shutting down server...")
+	sig := <-stop
+	slog.Info("received shutdown signal", "signal", sig.String())
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutMs)*time.Millisecond)
 	defer shutdownCancel()
 
+	// Signal all background loops (tickers, sync) to stop
+	cancel()
+
+	slog.Info("stopping http server...")
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server shutdown failed", "error", err)
+	} else {
+		slog.Info("http server stopped successfully")
 	}
 
-	slog.Info("draining event processor queues...")
+	slog.Info("draining event processor...")
 	eventProc.Close()
+	eventProc.Wait()
+	slog.Info("event processor stopped")
 
-	done := make(chan struct{})
-	go func() {
-		registry.Wait()
-		eventProc.Wait()
+	statsAgg.Stop()
 
-		// Signal aggregator to flush remaining in-memory stats
-		cancel()
-		statsAgg.Wait()
-		close(done)
-	}()
+	slog.Info("stopping campaign registry...")
+	registry.Wait()
+	slog.Info("campaign registry stopped")
 
-	select {
-	case <-done:
-		slog.Info("workers stopped gracefully")
-	case <-shutdownCtx.Done():
-		slog.Error("shutdown timeout exceeded, forcing exit")
-	}
-
-	slog.Info("server stopped")
+	slog.Info("closing database pool...")
+	pool.Close()
+	slog.Info("graceful shutdown complete")
 }

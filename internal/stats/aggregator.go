@@ -92,14 +92,20 @@ func (a *Aggregator) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				a.flush(true)
-				close(a.tasks)
 				return
 			case <-ticker.C:
-				a.flush(false)
+				a.flush()
 			}
 		}
 	}()
+}
+
+func (a *Aggregator) Stop() {
+	slog.Info("stats aggregator: performing final flush")
+	a.flush()
+	close(a.tasks)
+	a.Wait()
+	slog.Info("stats aggregator: stopped")
 }
 
 func (a *Aggregator) worker() {
@@ -203,7 +209,7 @@ func (a *Aggregator) Wait() {
 	a.wg.Wait()
 }
 
-func (a *Aggregator) flush(isShutdown bool) {
+func (a *Aggregator) flush() {
 	now := time.Now().Unix()
 	ttlThreshold := int64(CampaignTTL.Seconds())
 
