@@ -12,7 +12,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
 )
 
-const (
+var (
 	CampaignTTL = 2 * time.Hour
 )
 
