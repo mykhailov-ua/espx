@@ -157,9 +157,9 @@ func (a *Aggregator) doBatchFlush(batch []flushTask) {
 	}
 
 	var err error
-	waitTime := initialWait
+	waitTime := InitialWait
 
-	for i := 0; i <= maxRetries; i++ {
+	for i := 0; i <= MaxRetries; i++ {
 		dbCtx, cancel := context.WithTimeout(context.Background(), a.writeTimeout)
 
 		start := time.Now()
@@ -182,7 +182,7 @@ func (a *Aggregator) doBatchFlush(batch []flushTask) {
 			return
 		}
 
-		if i < maxRetries {
+		if i < MaxRetries {
 			slog.Warn("failed to update campaign stats batch, retrying...",
 				"size", len(batch),
 				"error", err,
@@ -190,8 +190,8 @@ func (a *Aggregator) doBatchFlush(batch []flushTask) {
 				"wait", waitTime)
 			time.Sleep(waitTime)
 			waitTime *= 2
-			if waitTime > maxWait {
-				waitTime = maxWait
+			if waitTime > MaxWait {
+				waitTime = MaxWait
 			}
 		}
 	}

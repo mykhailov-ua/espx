@@ -2,8 +2,8 @@ package ads
 
 import "time"
 
-const (
-	maxRetries  = 3
-	initialWait = 100 * time.Millisecond
-	maxWait     = 2 * time.Second
+var (
+	MaxRetries  = 3
+	InitialWait = 100 * time.Millisecond
+	MaxWait     = 2 * time.Second
 )

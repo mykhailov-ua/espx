@@ -179,9 +179,9 @@ func (p *Processor) flush(batch []Event) {
 	}
 
 	var err error
-	waitTime := initialWait
+	waitTime := InitialWait
 
-	for i := 0; i <= maxRetries; i++ {
+	for i := 0; i <= MaxRetries; i++ {
 		dbCtx, cancel := context.WithTimeout(context.Background(), p.writeTimeout)
 		start := time.Now()
 
@@ -206,12 +206,12 @@ func (p *Processor) flush(batch []Event) {
 			return
 		}
 
-		if i < maxRetries {
+		if i < MaxRetries {
 			slog.Warn("failed to flush event batch, retrying...", "error", err, "attempt", i+1, "wait", waitTime, "size", len(batch))
 			time.Sleep(waitTime)
 			waitTime *= 2
-			if waitTime > maxWait {
-				waitTime = maxWait
+			if waitTime > MaxWait {
+				waitTime = MaxWait
 			}
 		}
 	}
