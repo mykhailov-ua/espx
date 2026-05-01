@@ -10,6 +10,9 @@ type Config struct {
 	ServerPort        string
 	DBDSN             string
 	RedisAddr         string
+	RedisStreamName   string
+	RedisGroupName    string
+	RedisConsumerID   string
 	EventBatchSize    int
 	EventFlushMs      int
 	StatsFlushMs      int
@@ -35,6 +38,9 @@ func Load() (*Config, error) {
 		ServerPort:        os.Getenv("SERVER_PORT"),
 		DBDSN:             os.Getenv("DB_DSN"),
 		RedisAddr:         os.Getenv("REDIS_ADDR"),
+		RedisStreamName:   os.Getenv("REDIS_STREAM_NAME"),
+		RedisGroupName:    os.Getenv("REDIS_GROUP_NAME"),
+		RedisConsumerID:   os.Getenv("REDIS_CONSUMER_ID"),
 		EventBatchSize:    getEnvInt("EVENT_BATCH_SIZE", 1000),
 		EventFlushMs:      getEnvInt("EVENT_FLUSH_MS", 500),
 		StatsFlushMs:      getEnvInt("STATS_FLUSH_MS", 5000),
@@ -54,6 +60,20 @@ func Load() (*Config, error) {
 	}
 	if cfg.RedisAddr == "" {
 		return nil, fmt.Errorf("REDIS_ADDR is required")
+	}
+
+	if cfg.RedisStreamName == "" {
+		cfg.RedisStreamName = "ad:events:stream"
+	}
+	if cfg.RedisGroupName == "" {
+		cfg.RedisGroupName = "ad:processor:group"
+	}
+	if cfg.RedisConsumerID == "" {
+		hostname, _ := os.Hostname()
+		if hostname == "" {
+			hostname = "unknown"
+		}
+		cfg.RedisConsumerID = fmt.Sprintf("%s:%d", hostname, os.Getpid())
 	}
 
 	return cfg, nil
