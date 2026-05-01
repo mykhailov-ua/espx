@@ -69,7 +69,12 @@ func main() {
 	)
 	eventProc.Start(ctx)
 
-	mux := ads.NewRouter(cfg, registry, eventProc)
+	filterEngine := ads.NewFilterEngine(
+		ads.NewIPRateLimiter(rdb, cfg.RateLimitPerMin, 1*time.Minute),
+		ads.NewDuplicateEventFilter(rdb, time.Duration(cfg.DuplicateTTLSec)*time.Second),
+	)
+
+	mux := ads.NewRouter(cfg, registry, eventProc, filterEngine)
 
 	slog.Info("starting ad-event-processor", "port", cfg.ServerPort)
 

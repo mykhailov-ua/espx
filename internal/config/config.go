@@ -22,6 +22,8 @@ type Config struct {
 	DBMinConns        int
 	WriteTimeoutMs    int
 	ShutdownTimeoutMs int
+	RateLimitPerMin   int
+	DuplicateTTLSec   int
 }
 
 func getEnvInt(key string, fallback int) int {
@@ -50,6 +52,8 @@ func Load() (*Config, error) {
 		DBMinConns:        getEnvInt("DB_MIN_CONNS", 2),
 		WriteTimeoutMs:    getEnvInt("WRITE_TIMEOUT_MS", 5000),
 		ShutdownTimeoutMs: getEnvInt("SHUTDOWN_TIMEOUT_MS", 15000),
+		RateLimitPerMin:   getEnvInt("RATE_LIMIT_PER_MIN", 100),
+		DuplicateTTLSec:   getEnvInt("DUPLICATE_TTL_SEC", 10),
 	}
 
 	if cfg.ServerPort == "" {
