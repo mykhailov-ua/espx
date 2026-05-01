@@ -37,7 +37,6 @@ func main() {
 
 	queries := repository.New(pool)
 
-	// Partition Manager: use retention settings from config
 	partManager := database.NewPartitionManager(pool, cfg.LogRetentionDays, 2)
 	partManager.StartBackground(ctx)
 
@@ -50,8 +49,19 @@ func main() {
 	}
 	registry.StartSync(ctx, 1*time.Minute)
 
+	rdb, err := database.ConnectRedis(ctx, cfg.RedisAddr)
+	if err != nil {
+		slog.Error("failed to connect to redis", "error", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
+
 	eventProc := ads.NewProcessor(
 		queries,
+		rdb,
+		cfg.RedisStreamName,
+		cfg.RedisGroupName,
+		cfg.RedisConsumerID,
 		cfg.EventBatchSize,
 		cfg.MaxWorkers,
 		time.Duration(cfg.EventFlushMs)*time.Millisecond,
@@ -91,7 +101,6 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Duration(cfg.ShutdownTimeoutMs)*time.Millisecond)
 	defer shutdownCancel()
 
-	// Signal all background loops (tickers, sync) to stop
 	cancel()
 
 	slog.Info("stopping http server...")

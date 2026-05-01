@@ -21,17 +21,12 @@ var (
 	// Processor Metrics
 	EventsProcessed = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ad_events_processed_total",
-		Help: "Total number of events successfully accepted into the buffer",
+		Help: "Total number of events successfully accepted into Redis Streams",
 	})
 
 	EventsDropped = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ad_events_dropped_total",
-		Help: "Total number of events dropped due to full processor buffer",
-	})
-
-	ProcessorBufferUsage = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "ad_processor_buffer_usage",
-		Help: "Current number of events waiting in the processor channel",
+		Help: "Total number of events dropped due to Redis ingestion failure",
 	})
 
 	// Database Metrics

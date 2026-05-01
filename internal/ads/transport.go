@@ -2,7 +2,6 @@ package ads
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -127,12 +126,6 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *Processor, agg *Agg
 		})
 
 		if err != nil {
-			if errors.Is(err, ErrBufferFull) {
-				l.Error("processor buffer full")
-				status = http.StatusTooManyRequests
-				http.Error(w, "server overloaded", status)
-				return
-			}
 			l.Error("failed to process event", "error", err)
 			status = http.StatusInternalServerError
 			http.Error(w, "internal error", status)

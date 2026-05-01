@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
+	redis "github.com/redis/go-redis/v9"
 )
 
 // Event represents a single ad tracking event received from the transport layer.
@@ -23,23 +26,40 @@ type Event struct {
 }
 
 // Processor handles asynchronous batching and persistence of ad events.
-// It uses a pool of workers to achieve high throughput and database efficiency.
+// It uses Redis Streams for durable ingestion and a pool of workers for flushing to PostgreSQL.
 type Processor struct {
 	queries      repository.Querier
-	ch           chan Event
+	rdb          redis.UniversalClient
+	streamName   string
+	groupName    string
+	consumerID   string
 	batchSize    int
 	flushInt     time.Duration
 	writeTimeout time.Duration
 	maxWorkers   int
 	wg           sync.WaitGroup
+	cancel       context.CancelFunc
+	drainOnce    sync.Once
 }
 
-// NewProcessor initializes a new event processor with a balanced buffer size.
-func NewProcessor(queries repository.Querier, batchSize int, maxWorkers int, flushInt, writeTimeout time.Duration) *Processor {
+// ErrBufferFull is kept for backward compatibility in tests, though Redis Streams don't "fill up" in the same way.
+var ErrBufferFull = errors.New("event buffer is full")
+
+// NewProcessor initializes a new event processor backed by Redis Streams.
+func NewProcessor(
+	queries repository.Querier,
+	rdb redis.UniversalClient,
+	streamName, groupName, consumerID string,
+	batchSize int,
+	maxWorkers int,
+	flushInt, writeTimeout time.Duration,
+) *Processor {
 	return &Processor{
-		queries: queries,
-		// Buffer size gives headroom for bursts during worker flushes.
-		ch:           make(chan Event, batchSize*(maxWorkers+1)),
+		queries:      queries,
+		rdb:          rdb,
+		streamName:   streamName,
+		groupName:    groupName,
+		consumerID:   consumerID,
 		batchSize:    batchSize,
 		flushInt:     flushInt,
 		writeTimeout: writeTimeout,
@@ -47,13 +67,8 @@ func NewProcessor(queries repository.Querier, batchSize int, maxWorkers int, flu
 	}
 }
 
-// ErrBufferFull is returned when the internal event channel is at capacity.
-var ErrBufferFull = errors.New("event buffer is full")
-
-// Process pushes an event into the processing pipeline.
-// If the internal buffer is full, it returns ErrBufferFull to signal backpressure.
+// Process pushes an event into Redis Streams for durable processing.
 func (p *Processor) Process(evt Event) error {
-	// Ensure ClickID exists for idempotency even if the client didn't provide one.
 	if evt.ClickID == "" {
 		id, err := uuid.NewV7()
 		if err != nil {
@@ -62,102 +77,297 @@ func (p *Processor) Process(evt Event) error {
 		evt.ClickID = id.String()
 	}
 
-	select {
-	case p.ch <- evt:
-		EventsProcessed.Inc()
-		ProcessorBufferUsage.Set(float64(len(p.ch)))
-		return nil
-	default:
+	ctx, cancel := context.WithTimeout(context.Background(), p.writeTimeout)
+	defer cancel()
+
+	_, err := p.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: p.streamName,
+		MaxLen: 100000,
+		Approx: true,
+		Values: map[string]interface{}{
+			"click_id":    evt.ClickID,
+			"campaign_id": evt.CampaignID.String(),
+			"type":        evt.Type,
+			"payload":     evt.Payload,
+			"ip":          evt.IP,
+			"ua":          evt.UA,
+		},
+	}).Result()
+
+	if err != nil {
 		EventsDropped.Inc()
-		return ErrBufferFull
+		return err
 	}
+
+	EventsProcessed.Inc()
+	return nil
 }
 
-// Start spawns background workers.
+// Start spawns background workers and the recovery janitor.
 func (p *Processor) Start(ctx context.Context) {
+	// Create a sub-context that we can cancel in Close()
+	procCtx, cancel := context.WithCancel(ctx)
+	p.cancel = cancel
+
 	for i := 0; i < p.maxWorkers; i++ {
 		p.wg.Add(1)
-		go p.worker(ctx)
+		go p.worker(procCtx)
+	}
+
+	p.wg.Add(1)
+	go p.janitor(procCtx)
+}
+
+// Close signals workers to stop. This is used in tests and main shutdown.
+func (p *Processor) Close() {
+	if p.cancel != nil {
+		p.cancel()
 	}
 }
 
-// worker consumes events from the channel and flushes them in batches.
-// It flushes either when the batch size is reached or the flush interval expires.
+// Wait blocks until all workers have finished processing their current batches.
+func (p *Processor) Wait() {
+	p.wg.Wait()
+}
+
 func (p *Processor) worker(ctx context.Context) {
 	defer p.wg.Done()
+
+	err := p.rdb.XGroupCreateMkStream(ctx, p.streamName, p.groupName, "$").Err()
+	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+		slog.Error("failed to create consumer group", "error", err, "stream", p.streamName, "group", p.groupName)
+		return
+	}
+
+	p.recoverPending(ctx)
+
 	batch := make([]Event, 0, p.batchSize)
+	msgIDs := make([]string, 0, p.batchSize)
+	createdAts := make([]time.Time, 0, p.batchSize)
 	ticker := time.NewTicker(p.flushInt)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Drain remaining events in the channel on context cancellation.
-		drainLoop:
-			for {
-				select {
-				case evt, ok := <-p.ch:
-					if !ok {
-						break drainLoop
-					}
-					batch = append(batch, evt)
-					if len(batch) >= p.batchSize {
-						p.flush(batch)
-						p.ClearBatch(&batch)
-					}
-				default:
-					break drainLoop
-				}
-			}
 			if len(batch) > 0 {
-				p.flush(batch)
+				p.flushBatch(batch, msgIDs, createdAts)
 			}
+			p.drainOnce.Do(p.drainStream)
 			return
-		case evt, ok := <-p.ch:
-			if !ok {
-				if len(batch) > 0 {
-					p.flush(batch)
-				}
-				return
-			}
-			batch = append(batch, evt)
-			if len(batch) >= p.batchSize {
-				p.flush(batch)
-				p.ClearBatch(&batch)
-				ticker.Reset(p.flushInt)
-			}
 		case <-ticker.C:
 			if len(batch) > 0 {
-				p.flush(batch)
-				p.ClearBatch(&batch)
+				p.flushBatch(batch, msgIDs, createdAts)
+				batch = batch[:0]
+				msgIDs = msgIDs[:0]
+				createdAts = createdAts[:0]
+			}
+		default:
+			streams, err := p.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+				Group:    p.groupName,
+				Consumer: p.consumerID,
+				Streams:  []string{p.streamName, ">"},
+				Count:    int64(p.batchSize - len(batch)),
+				Block:    p.flushInt,
+			}).Result()
+
+			if err != nil {
+				if err != redis.Nil && ctx.Err() == nil {
+					slog.Error("failed to read from redis stream", "error", err)
+					time.Sleep(time.Second)
+				}
+				continue
+			}
+
+			for _, stream := range streams {
+				for _, msg := range stream.Messages {
+					evt := p.parseMessage(msg.Values)
+					batch = append(batch, evt)
+					msgIDs = append(msgIDs, msg.ID)
+					createdAts = append(createdAts, p.extractTimestamp(msg.ID))
+
+					if len(batch) >= p.batchSize {
+						p.flushBatch(batch, msgIDs, createdAts)
+						batch = batch[:0]
+						msgIDs = msgIDs[:0]
+						createdAts = createdAts[:0]
+						ticker.Reset(p.flushInt)
+					}
+				}
 			}
 		}
 	}
 }
 
-// Close signals workers to drain and stop by closing the channel.
-func (p *Processor) Close() {
-	close(p.ch)
-}
+// drainStream reads and flushes all remaining unread messages from the Redis stream
+// using a background context. Called during graceful shutdown to prevent data loss.
+func (p *Processor) drainStream() {
+	drainCtx, cancel := context.WithTimeout(context.Background(), p.writeTimeout)
+	defer cancel()
 
-// Wait blocks until all workers have finished draining.
-func (p *Processor) Wait() {
-	p.wg.Wait()
-}
+	for {
+		streams, err := p.rdb.XReadGroup(drainCtx, &redis.XReadGroupArgs{
+			Group:    p.groupName,
+			Consumer: p.consumerID,
+			Streams:  []string{p.streamName, ">"},
+			Count:    int64(p.batchSize),
+			Block:    time.Millisecond,
+		}).Result()
 
-// ClearBatch resets the batch slice while retaining the underlying array.
-func (p *Processor) ClearBatch(batch *[]Event) {
-	for i := range *batch {
-		(*batch)[i].Payload = nil
-		(*batch)[i].IP = ""
-		(*batch)[i].UA = ""
+		if err != nil || len(streams) == 0 {
+			break
+		}
+
+		for _, stream := range streams {
+			if len(stream.Messages) == 0 {
+				return
+			}
+
+			batch := make([]Event, 0, len(stream.Messages))
+			msgIDs := make([]string, 0, len(stream.Messages))
+			createdAts := make([]time.Time, 0, len(stream.Messages))
+
+			for _, msg := range stream.Messages {
+				batch = append(batch, p.parseMessage(msg.Values))
+				msgIDs = append(msgIDs, msg.ID)
+				createdAts = append(createdAts, p.extractTimestamp(msg.ID))
+			}
+
+			p.flushBatch(batch, msgIDs, createdAts)
+			slog.Info("drained messages during shutdown", "count", len(batch))
+		}
 	}
-	*batch = (*batch)[:0]
 }
 
-// flush serializes the event batch and performs a bulk insert into PostgreSQL.
-// It uses ON CONFLICT DO NOTHING for idempotency based on (click_id, created_at).
-func (p *Processor) flush(batch []Event) {
+func (p *Processor) parseMessage(values map[string]interface{}) Event {
+	evt := Event{}
+	if v, ok := values["click_id"].(string); ok {
+		evt.ClickID = v
+	}
+	if v, ok := values["campaign_id"].(string); ok {
+		evt.CampaignID, _ = uuid.Parse(v)
+	}
+	if v, ok := values["type"].(string); ok {
+		evt.Type = v
+	}
+	if v, ok := values["payload"].(string); ok {
+		evt.Payload = []byte(v)
+	}
+	if v, ok := values["ip"].(string); ok {
+		evt.IP = v
+	}
+	if v, ok := values["ua"].(string); ok {
+		evt.UA = v
+	}
+	return evt
+}
+
+func (p *Processor) flushBatch(batch []Event, msgIDs []string, createdAts []time.Time) {
+	if len(batch) == 0 {
+		return
+	}
+
+	p.flush(batch, createdAts)
+
+	ctx, cancel := context.WithTimeout(context.Background(), p.writeTimeout)
+	defer cancel()
+	if err := p.rdb.XAck(ctx, p.streamName, p.groupName, msgIDs...).Err(); err != nil {
+		slog.Error("failed to ack messages", "error", err, "stream", p.streamName, "group", p.groupName)
+	}
+}
+
+func (p *Processor) extractTimestamp(id string) time.Time {
+	parts := strings.Split(id, "-")
+	if len(parts) < 1 {
+		return time.Now()
+	}
+	msec, _ := strconv.ParseInt(parts[0], 10, 64)
+	return time.Unix(msec/1000, (msec%1000)*1000000)
+}
+
+func (p *Processor) recoverPending(ctx context.Context) {
+	for {
+		entries, err := p.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    p.groupName,
+			Consumer: p.consumerID,
+			Streams:  []string{p.streamName, "0"},
+			Count:    int64(p.batchSize),
+		}).Result()
+
+		if err != nil || len(entries) == 0 || len(entries[0].Messages) == 0 {
+			return
+		}
+
+		batch := make([]Event, 0, len(entries[0].Messages))
+		msgIDs := make([]string, 0, len(entries[0].Messages))
+		createdAts := make([]time.Time, 0, len(entries[0].Messages))
+
+		for _, msg := range entries[0].Messages {
+			batch = append(batch, p.parseMessage(msg.Values))
+			msgIDs = append(msgIDs, msg.ID)
+			createdAts = append(createdAts, p.extractTimestamp(msg.ID))
+		}
+
+		p.flushBatch(batch, msgIDs, createdAts)
+	}
+}
+
+func (p *Processor) janitor(ctx context.Context) {
+	defer p.wg.Done()
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.claimStuckMessages(ctx)
+		}
+	}
+}
+
+func (p *Processor) claimStuckMessages(ctx context.Context) {
+	startID := "0-0"
+	for {
+		entries, nextID, err := p.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
+			Stream:   p.streamName,
+			Group:    p.groupName,
+			Consumer: p.consumerID,
+			MinIdle:  5 * time.Minute,
+			Start:    startID,
+			Count:    int64(p.batchSize),
+		}).Result()
+
+		if err != nil {
+			if err != redis.Nil {
+				slog.Error("autoclaim failed", "error", err)
+			}
+			return
+		}
+
+		if len(entries) > 0 {
+			batch := make([]Event, 0, len(entries))
+			msgIDs := make([]string, 0, len(entries))
+			createdAts := make([]time.Time, 0, len(entries))
+
+			for _, msg := range entries {
+				batch = append(batch, p.parseMessage(msg.Values))
+				msgIDs = append(msgIDs, msg.ID)
+				createdAts = append(createdAts, p.extractTimestamp(msg.ID))
+			}
+			p.flushBatch(batch, msgIDs, createdAts)
+			slog.Info("successfully reclaimed and processed stuck messages", "count", len(entries))
+		}
+
+		if nextID == "0-0" {
+			break
+		}
+		startID = nextID
+	}
+}
+
+func (p *Processor) flush(batch []Event, createdAts []time.Time) {
 	if len(batch) == 0 {
 		return
 	}
@@ -168,9 +378,8 @@ func (p *Processor) flush(batch []Event) {
 	payloads := make([][]byte, len(batch))
 	ipAddresses := make([]string, len(batch))
 	userAgents := make([]string, len(batch))
-	createdAts := make([]pgtype.Timestamptz, len(batch))
+	dbCreatedAts := make([]pgtype.Timestamptz, len(batch))
 
-	now := time.Now()
 	defaultPayload := []byte("{}")
 	for i, evt := range batch {
 		clickIDs[i] = evt.ClickID
@@ -183,7 +392,7 @@ func (p *Processor) flush(batch []Event) {
 		}
 		ipAddresses[i] = evt.IP
 		userAgents[i] = evt.UA
-		createdAts[i] = pgtype.Timestamptz{Time: now, Valid: true}
+		dbCreatedAts[i] = pgtype.Timestamptz{Time: createdAts[i], Valid: true}
 	}
 
 	var err error
@@ -200,7 +409,7 @@ func (p *Processor) flush(batch []Event) {
 			Payloads:    payloads,
 			IpAddresses: ipAddresses,
 			UserAgents:  userAgents,
-			CreatedAt:   createdAts,
+			CreatedAt:   dbCreatedAts,
 		})
 
 		duration := time.Since(start).Seconds()
