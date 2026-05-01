@@ -69,15 +69,7 @@ func main() {
 	)
 	eventProc.Start(ctx)
 
-	statsAgg := ads.NewAggregator(
-		queries,
-		time.Duration(cfg.StatsFlushMs)*time.Millisecond,
-		time.Duration(cfg.WriteTimeoutMs)*time.Millisecond,
-		cfg.MaxWorkers,
-	)
-	statsAgg.Start(ctx)
-
-	mux := ads.NewRouter(cfg, registry, eventProc, statsAgg)
+	mux := ads.NewRouter(cfg, registry, eventProc)
 
 	slog.Info("starting ad-event-processor", "port", cfg.ServerPort)
 
@@ -114,8 +106,6 @@ func main() {
 	eventProc.Close()
 	eventProc.Wait()
 	slog.Info("event processor stopped")
-
-	statsAgg.Stop()
 
 	slog.Info("stopping campaign registry...")
 	registry.Wait()

@@ -57,10 +57,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	eventProc := ads.NewProcessor(queries, rdb, "shutdown-stream", "shutdown-group", "shutdown-c1", cfg.EventBatchSize, cfg.MaxWorkers, 100*time.Millisecond, 5*time.Second)
 	eventProc.Start(ctx)
 
-	statsAgg := ads.NewAggregator(queries, 100*time.Millisecond, 5*time.Second, cfg.MaxWorkers)
-	statsAgg.Start(ctx)
-
-	router := ads.NewRouter(cfg, registry, eventProc, statsAgg)
+	router := ads.NewRouter(cfg, registry, eventProc)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
@@ -98,7 +95,6 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	eventProc.Wait()
 
 	cancel()
-	statsAgg.Stop()
 
 	assert.Eventually(t, func() bool {
 		var dbEventCount int64

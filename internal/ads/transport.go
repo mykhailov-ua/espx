@@ -17,7 +17,7 @@ import (
 )
 
 // NewRouter initializes the HTTP router with metrics, health checks, and tracking endpoints.
-func NewRouter(cfg *config.Config, registry *Registry, proc *Processor, agg *Aggregator) http.Handler {
+func NewRouter(cfg *config.Config, registry *Registry, proc *Processor) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /metrics", promhttp.Handler())
@@ -131,8 +131,6 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *Processor, agg *Agg
 			http.Error(w, "internal error", status)
 			return
 		}
-
-		agg.Increment(campaignID, eventType)
 
 		// Respond in the requested format (Protobuf or JSON).
 		if r.Header.Get("Accept") == "application/x-protobuf" {

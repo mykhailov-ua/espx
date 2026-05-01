@@ -59,10 +59,7 @@ func TestE2EFlow(t *testing.T) {
 	eventProc.Start(ctx)
 	defer eventProc.Close()
 
-	statsAgg := ads.NewAggregator(queries, 100*time.Millisecond, 1*time.Second, cfg.MaxWorkers)
-	statsAgg.Start(ctx)
-
-	router := ads.NewRouter(cfg, registry, eventProc, statsAgg)
+	router := ads.NewRouter(cfg, registry, eventProc)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
@@ -124,10 +121,7 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 	eventProc.Start(ctx)
 	defer eventProc.Close()
 
-	statsAgg := ads.NewAggregator(queries, 100*time.Millisecond, 1*time.Second, cfg.MaxWorkers)
-	statsAgg.Start(ctx)
-
-	router := ads.NewRouter(cfg, registry, eventProc, statsAgg)
+	router := ads.NewRouter(cfg, registry, eventProc)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
