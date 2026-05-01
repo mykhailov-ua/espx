@@ -59,7 +59,7 @@ func TestE2EFlow(t *testing.T) {
 	eventProc.Start(ctx)
 	defer eventProc.Close()
 
-	router := ads.NewRouter(cfg, registry, eventProc)
+	router := ads.NewRouter(cfg, registry, eventProc, nil)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
@@ -121,7 +121,7 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 	eventProc.Start(ctx)
 	defer eventProc.Close()
 
-	router := ads.NewRouter(cfg, registry, eventProc)
+	router := ads.NewRouter(cfg, registry, eventProc, nil)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

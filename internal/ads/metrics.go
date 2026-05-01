@@ -41,14 +41,9 @@ var (
 		Help: "Total number of database write errors",
 	}, []string{"type"})
 
-	// Aggregator Metrics
-	StatsIncrements = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "ad_stats_increments_total",
-		Help: "Total number of statistical increments processed in memory",
-	})
-
-	ActiveCampaignsCount = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "ad_stats_active_campaigns_count",
-		Help: "Current number of campaigns tracked in aggregator memory",
-	})
+	// Filter Metrics
+	FilterBlockedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ad_filter_blocked_total",
+		Help: "Total number of events blocked by intelligent filters",
+	}, []string{"reason"})
 )

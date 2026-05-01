@@ -2,8 +2,10 @@ package ads
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"strconv"
@@ -17,7 +19,7 @@ import (
 )
 
 // NewRouter initializes the HTTP router with metrics, health checks, and tracking endpoints.
-func NewRouter(cfg *config.Config, registry *Registry, proc *Processor) http.Handler {
+func NewRouter(cfg *config.Config, registry *Registry, proc *Processor, filterEngine *FilterEngine) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /metrics", promhttp.Handler())
@@ -51,9 +53,13 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *Processor) http.Han
 		var eventType string
 		var payload []byte
 
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+
 		clickID := requestID // Default to requestID for idempotency if click_id is missing
 
-		// Protocol negotiation: handle high-performance Protobuf or debug-friendly JSON.
 		contentType := r.Header.Get("Content-Type")
 		if contentType == "application/x-protobuf" {
 			body, err := io.ReadAll(r.Body)
@@ -87,7 +93,6 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *Processor) http.Han
 				payload, _ = json.Marshal(pbReq.Metadata)
 			}
 		} else {
-			// Fallback to JSON
 			var req struct {
 				CampaignID uuid.UUID       `json:"campaign_id"`
 				Type       string          `json:"type"`
@@ -116,14 +121,42 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *Processor) http.Han
 			return
 		}
 
-		err := proc.Process(Event{
+		evt := Event{
 			ClickID:    clickID,
 			CampaignID: campaignID,
 			Type:       eventType,
 			Payload:    payload,
-			IP:         r.RemoteAddr,
+			IP:         ip,
 			UA:         r.UserAgent(),
-		})
+		}
+
+		if filterEngine != nil {
+			if err := filterEngine.Check(r.Context(), evt); err != nil {
+				l.Warn("event rejected by filter", "error", err)
+				reason := "unknown"
+				if errors.Is(err, ErrRateLimitExceeded) {
+					reason = "rate_limit"
+				} else if errors.Is(err, ErrDuplicateEvent) {
+					reason = "duplicate"
+				}
+				FilterBlockedTotal.WithLabelValues(reason).Inc()
+
+				status = http.StatusTooManyRequests
+				if r.Header.Get("Accept") == "application/x-protobuf" {
+					http.Error(w, err.Error(), status)
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(status)
+					_ = json.NewEncoder(w).Encode(map[string]string{
+						"request_id": requestID,
+						"error":      err.Error(),
+					})
+				}
+				return
+			}
+		}
+
+		err = proc.Process(evt)
 
 		if err != nil {
 			l.Error("failed to process event", "error", err)
@@ -132,7 +165,6 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *Processor) http.Han
 			return
 		}
 
-		// Respond in the requested format (Protobuf or JSON).
 		if r.Header.Get("Accept") == "application/x-protobuf" {
 			resp := &pb.TrackResponse{
 				RequestId: requestID,
