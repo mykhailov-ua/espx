@@ -32,6 +32,7 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
 	ipAddresses := make([]string, len(events))
 	userAgents := make([]string, len(events))
 	createdAts := make([]pgtype.Timestamptz, len(events))
+	createdDates := make([]pgtype.Date, len(events))
 
 	defaultPayload := []byte("{}")
 
@@ -46,8 +47,11 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
 		}
 		ipAddresses[i] = evt.IP
 		userAgents[i] = evt.UA
-		// Use stable CreatedAt from event (derived from Redis ID) for idempotency.
 		createdAts[i] = pgtype.Timestamptz{Time: evt.CreatedAt, Valid: true}
+		createdDates[i] = pgtype.Date{
+			Time:  time.Date(evt.CreatedAt.Year(), evt.CreatedAt.Month(), evt.CreatedAt.Day(), 0, 0, 0, 0, time.UTC),
+			Valid: true,
+		}
 	}
 
 	var err error
@@ -58,13 +62,14 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
 		start := time.Now()
 
 		err = s.queries.InsertEventsBatch(dbCtx, repository.InsertEventsBatchParams{
-			ClickIds:    clickIDs,
-			CampaignIds: campaignIDs,
-			EventTypes:  eventTypes,
-			Payloads:    payloads,
-			IpAddresses: ipAddresses,
-			UserAgents:  userAgents,
-			CreatedAt:   createdAts,
+			ClickIds:     clickIDs,
+			CampaignIds:  campaignIDs,
+			EventTypes:   eventTypes,
+			Payloads:     payloads,
+			IpAddresses:  ipAddresses,
+			UserAgents:   userAgents,
+			CreatedAt:    createdAts,
+			CreatedDates: createdDates,
 		})
 
 		duration := time.Since(start).Seconds()
