@@ -55,7 +55,7 @@ func main() {
 	}
 	registry.StartSync(ctx, 1*time.Minute)
 
-	rdb, err := database.ConnectRedis(ctx, cfg.RedisAddr)
+	rdb, err := database.ConnectRedis(ctx, cfg.RedisAddr, cfg.RedisPassword)
 	if err != nil {
 		slog.Error("failed to connect to redis", "error", err)
 		os.Exit(1)
@@ -103,8 +103,12 @@ func main() {
 	slog.Info("starting ad-event-processor", "port", cfg.ServerPort)
 
 	server := &http.Server{
-		Addr:    ":" + cfg.ServerPort,
-		Handler: mux,
+		Addr:              ":" + cfg.ServerPort,
+		Handler:           mux,
+		ReadHeaderTimeout: 2 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 
 	go func() {

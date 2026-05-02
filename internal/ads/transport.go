@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,9 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *StreamConsumer, fil
 			HttpRequestDuration.WithLabelValues("POST", "/track").Observe(duration)
 		}()
 
+		// Prevent OOM by limiting request body size to 1MB
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 		requestID := uuid.New().String()
 		l := slog.With("request_id", requestID)
 
@@ -53,12 +57,8 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *StreamConsumer, fil
 		var eventType string
 		var payload []byte
 
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-
-		clickID := requestID // Default to requestID for idempotency if click_id is missing
+		ip := extractClientIP(r)
+		clickID := requestID
 
 		contentType := r.Header.Get("Content-Type")
 		if contentType == "application/x-protobuf" {
@@ -156,7 +156,7 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *StreamConsumer, fil
 			}
 		}
 
-		err = proc.Process(evt)
+		err := proc.Process(evt)
 
 		if err != nil {
 			l.Error("failed to process event", "error", err)
@@ -185,4 +185,27 @@ func NewRouter(cfg *config.Config, registry *Registry, proc *StreamConsumer, fil
 	})
 
 	return mux
+}
+
+// extractClientIP returns the client's real IP address.
+// When behind a trusted reverse proxy (Caddy, Nginx), the proxy sets
+// X-Forwarded-For or X-Real-IP headers. Without these headers, falls
+// back to the TCP connection's RemoteAddr.
+func extractClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// X-Forwarded-For: client, proxy1, proxy2
+		// Leftmost entry is the original client IP.
+		if idx := strings.IndexByte(xff, ','); idx != -1 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return ip
 }
