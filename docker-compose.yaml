@@ -40,8 +40,7 @@ services:
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${DB_NAME}
-    ports:
-      - "${DB_PORT}:${DB_PORT}"
+    # No host port exposure — accessible only within 'database' network.
     command: ["postgres", "-p", "${DB_PORT}"]
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -57,9 +56,8 @@ services:
     image: redis:${REDIS_VERSION}
     env_file:
       - .env
-    ports:
-      - "${REDIS_PORT}:${REDIS_PORT}"
-    command: ["redis-server", "--port", "${REDIS_PORT}"]
+    # No host port exposure — accessible only within 'database' network.
+    command: ["redis-server", "--port", "${REDIS_PORT}", "--requirepass", "${REDIS_PASSWORD}"]
     deploy:
       resources:
         limits:
@@ -67,7 +65,7 @@ services:
     networks:
       - database
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "${REDIS_PORT}", "ping"]
+      test: ["CMD", "redis-cli", "-p", "${REDIS_PORT}", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: ${HEALTHCHECK_INTERVAL}
       timeout: ${HEALTHCHECK_TIMEOUT}
       retries: ${HEALTHCHECK_RETRIES}
@@ -84,9 +82,8 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.listen-address=:${PROMETHEUS_PORT}'
-      - '--web.enable-remote-write-receiver'
-    ports:
-      - "${PROMETHEUS_PORT}:${PROMETHEUS_PORT}"
+    # Removed --web.enable-remote-write-receiver to prevent metric injection.
+    # No host port exposure — accessible only within 'monitoring' network.
     networks:
       - monitoring
     healthcheck:
@@ -101,8 +98,7 @@ services:
       - .env
     environment:
       - GF_SERVER_HTTP_PORT=${GRAFANA_PORT}
-      - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
     ports:
       - "${GRAFANA_PORT}:${GRAFANA_PORT}"
     volumes:
@@ -139,9 +135,7 @@ services:
     image: clickhouse/clickhouse-server:${CH_VERSION}
     env_file:
       - .env
-    ports:
-      - "${CH_PORT}:${CH_PORT}"
-      - "${CH_HTTP_PORT}:${CH_HTTP_PORT}"
+    # No host port exposure — accessible only within 'database' network.
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./deploy/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql
@@ -160,8 +154,10 @@ networks:
     driver: bridge
   database:
     driver: bridge
+    internal: true
   monitoring:
     driver: bridge
+    internal: true
 
 volumes:
   db_data:
