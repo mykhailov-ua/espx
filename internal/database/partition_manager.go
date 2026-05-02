@@ -52,6 +52,10 @@ func (pm *PartitionManager) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to drop partitions: %w", err)
 	}
 
+	if err := pm.truncateDefault(ctx); err != nil {
+		slog.Warn("failed to truncate events_default", "error", err)
+	}
+
 	return nil
 }
 
@@ -121,6 +125,18 @@ func (pm *PartitionManager) dropPartitions(ctx context.Context, now time.Time, o
 		}
 	}
 
+	return nil
+}
+
+// truncateDefault clears the default partition that catches events not matching
+// any date-based partition. Without periodic cleanup, this table grows unbounded
+// and degrades query performance via sequential scans.
+func (pm *PartitionManager) truncateDefault(ctx context.Context) error {
+	_, err := pm.pool.Exec(ctx, "TRUNCATE TABLE events_default")
+	if err != nil {
+		return err
+	}
+	slog.Info("truncated events_default partition")
 	return nil
 }
 

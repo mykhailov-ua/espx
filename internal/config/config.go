@@ -10,6 +10,7 @@ type Config struct {
 	ServerPort        string
 	DBDSN             string
 	RedisAddr         string
+	RedisPassword     string
 	RedisStreamName   string
 	RedisGroupName    string
 	RedisConsumerID   string
@@ -43,6 +44,7 @@ func Load() (*Config, error) {
 		ServerPort:        os.Getenv("SERVER_PORT"),
 		DBDSN:             os.Getenv("DB_DSN"),
 		RedisAddr:         os.Getenv("REDIS_ADDR"),
+		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
 		RedisStreamName:   os.Getenv("REDIS_STREAM_NAME"),
 		RedisGroupName:    os.Getenv("REDIS_GROUP_NAME"),
 		RedisConsumerID:   os.Getenv("REDIS_CONSUMER_ID"),

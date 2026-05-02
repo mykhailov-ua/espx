@@ -7,9 +7,10 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-func ConnectRedis(ctx context.Context, addr string) (redis.UniversalClient, error) {
+func ConnectRedis(ctx context.Context, addr string, password string) (redis.UniversalClient, error) {
 	rdb := redis.NewUniversalClient(&redis.UniversalOptions{
-		Addrs: []string{addr},
+		Addrs:    []string{addr},
+		Password: password,
 	})
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
