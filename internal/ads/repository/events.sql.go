@@ -164,7 +164,7 @@ type InsertEventsBatchParams struct {
 	CreatedAt   []pgtype.Timestamptz `json:"created_at"`
 }
 
-// Performs a high-performance batch insert and atomically updates campaign stats.
+// Performs batch insert and atomically updates campaign stats.
 // Exactly-once aggregation is guaranteed because only newly inserted rows are counted.
 func (q *Queries) InsertEventsBatch(ctx context.Context, arg InsertEventsBatchParams) error {
 	_, err := q.db.Exec(ctx, insertEventsBatch,

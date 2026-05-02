@@ -42,7 +42,7 @@ ON CONFLICT (campaign_id, date) DO UPDATE SET
     conversions_count = campaign_stats.conversions_count + EXCLUDED.conversions_count;
 
 -- name: InsertEventsBatch :exec
--- Performs a high-performance batch insert and atomically updates campaign stats.
+-- Performs batch insert and atomically updates campaign stats.
 -- Exactly-once aggregation is guaranteed because only newly inserted rows are counted.
 WITH inserted AS (
     INSERT INTO events (click_id, campaign_id, event_type, payload, ip_address, user_agent, created_at)

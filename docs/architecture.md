@@ -1,38 +1,51 @@
-# System Architecture & Request Lifecycle
+# Ad Event Processor Architecture Specification
 
-High-performance, stateless ad event ingestion engine. Designed for horizontal scalability and data integrity using a distributed pipeline.
+Technical overview of the ad event ingestion pipeline and storage architecture.
 
-## Request Lifecycle
+## Ingestion Pipeline
 
-`POST /track` flow:
+### HTTP Ingress
+*   Protocol: HTTP/1.1 or HTTP/3 (via Caddy).
+*   Format: JSON or Protobuf (application/x-protobuf).
+*   Filtering: IP-based rate limiting and `click_id` deduplication via Redis.
+*   Validation: Synchronous check against in-memory Campaign Registry.
 
-1.  **Ingestion & Intelligence**:
-    - JSON/Protobuf payload is decoded.
-    - **Intelligent Filtering**: Middleware checks IP rate limits and deduplicates `click_id` via Redis.
-    - **Validation**: O(1) campaign existence check via `Campaign Registry` (synced in-memory map).
-    - Returns `429 Too Many Requests` or `404 Not Found` immediately if filtered.
+### Message Backbone (Redis Streams)
+*   Stream: `ad:events:stream` (configurable).
+*   Retention: `MAXLEN ~100000` (approximate).
+*   Consumer Groups: Independent groups for parallel ingestion into multiple sinks.
 
-2.  **Durable Hand-off**:
-    - Handler returns `202 Accepted` once the event is pushed to **Redis Streams**.
-    - This ensures ingestion is decoupled from database availability.
+## Storage Strategy (T-Split)
 
-3.  **Asynchronous Persistence & Aggregation**:
-    - **Worker Pool**: Consumers read batches from Redis Streams.
-    - **Atomic Persistence**: Events are flushed to PostgreSQL using a **CTE (Common Table Expression)**.
-    - **Exactly-Once Aggregation**: The CTE inserts events (`ON CONFLICT DO NOTHING`) and atomically updates `campaign_stats` only for the rows that were successfully inserted.
+Events are consumed by multiple `StreamConsumer` instances using separate Redis Consumer Groups.
 
-## Core Components
+### PostgreSQL Sink (`group_pg`)
+*   Data: Raw event logs and campaign statistics.
+*   Partitioning: Time-based partitioning on `created_at` (daily).
+*   Aggregation: Atomic "Insert + Update" via SQL CTEs.
+*   Worker Count: 16 (matched to DB connection pool).
 
-- **Campaign Registry**: Local cache of active campaigns. Syncs with DB every minute. 
-- **Redis Streams**: Acting as a high-throughput, durable write-ahead log (WAL) for incoming events.
-- **Worker Pool**: Distributed consumers with unique Consumer IDs, enabling parallel processing without race conditions.
-- **SQL CTE Aggregator**: Replaces in-memory maps with database-level atomicity, ensuring 100% consistency between raw logs and aggregated stats.
+### ClickHouse Sink (`group_ch`)
+*   Data: Long-term analytical logs.
+*   Retention: 180 days via TTL.
+*   Table Engine: `ReplacingMergeTree` (partitioned by month).
+*   Batch Size: 50,000 events.
+*   Worker Count: 1.
 
-## Shutdown Sequence (Zero Data Loss)
+## Reliability Mechanisms
 
-Strict order of operations on `SIGTERM/SIGINT`:
-1.  **Stop Server**: Stop accepting new HTTP requests.
-2.  **Close Processor**: Stop fetching from Redis.
-3.  **Drain Loop**: Final attempt to flush current in-flight batches to PostgreSQL.
-4.  **Wait for Workers**: Ensure all DB transactions are committed.
-5.  **Cleanup**: Close Redis and PostgreSQL connection pools.
+### Pending Entries List (PEL) Recovery
+Consumers check assigned PEL (ID "0") on startup to process unacknowledged messages from previous runs.
+
+### XAutoClaim Janitor
+Background task periodically reclaims messages from consumers idle for >5 minutes.
+
+### Acknowledgment (ACK) Policy
+`XAck` is invoked only after confirmed successful persistence in `EventStore`. Failed storage operations trigger backoff retry and leave message in the PEL.
+
+## Shutdown Sequence
+
+1.  HTTP Server: Stop accepting new requests.
+2.  Context Cancellation: Signal `StreamConsumer` workers to stop reading.
+3.  Drain Phase: Final flush of local buffers and exhaustion of PEL/Stream tail using dedicated context (15s timeout).
+4.  Connection Cleanup: Close Redis, PostgreSQL, and ClickHouse pools.

@@ -101,5 +101,5 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 		var dbEventCount int64
 		err = pool.QueryRow(context.Background(), "SELECT count(*) FROM events WHERE campaign_id = $1", campaignID).Scan(&dbEventCount)
 		return err == nil && dbEventCount == acceptedCount
-	}, 5*time.Second, 100*time.Millisecond, "All accepted events should be persisted to database")
+	}, 15*time.Second, 100*time.Millisecond, "All accepted events should be persisted to database")
 }

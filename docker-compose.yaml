@@ -136,7 +136,7 @@ services:
         condition: service_healthy
 
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:${CH_VERSION}
     env_file:
       - .env
     ports:

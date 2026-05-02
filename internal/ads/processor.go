@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,17 +15,17 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-// Event represents a single ad tracking event received from the transport layer.
 type Event struct {
-	ClickID    string    // ClickID is used for idempotency to prevent double-counting.
-	CampaignID uuid.UUID // CampaignID identifies the target ad campaign.
-	Type       string    // Type is one of: impression, click, conversion.
-	Payload    []byte    // Payload contains raw JSON metadata for storage.
-	IP         string    // IP address of the sender.
-	UA         string    // User Agent of the sender.
+	ClickID    string
+	CampaignID uuid.UUID
+	Type       string
+	Payload    []byte
+	IP         string
+	UA         string
+	CreatedAt  time.Time
 }
 
-// StreamConsumer handles reading events from Redis Streams and persisting them.
+// StreamConsumer implements event ingestion from Redis Streams to EventStore.
 type StreamConsumer struct {
 	store        EventStore
 	rdb          redis.UniversalClient
@@ -40,9 +42,6 @@ type StreamConsumer struct {
 	recoverOnce  sync.Once
 }
 
-var ErrBufferFull = errors.New("event buffer is full")
-
-// NewStreamConsumer initializes a new event consumer backed by Redis Streams.
 func NewStreamConsumer(
 	store EventStore,
 	rdb redis.UniversalClient,
@@ -70,7 +69,6 @@ func NewStreamConsumer(
 	}
 }
 
-// Process pushes an event into Redis Streams.
 func (p *StreamConsumer) Process(evt Event) error {
 	if evt.ClickID == "" {
 		id, err := uuid.NewV7()
@@ -139,8 +137,6 @@ func (p *StreamConsumer) worker(ctx context.Context) {
 	}
 
 	p.recoverOnce.Do(func() {
-		// Use a background context with timeout for initial recovery to ensure it proceeds 
-		// even if the application is starting its shutdown sequence.
 		initCtx, cancel := context.WithTimeout(context.Background(), p.writeTimeout*2)
 		defer cancel()
 		p.recoverPending(initCtx)
@@ -154,32 +150,45 @@ func (p *StreamConsumer) worker(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			// Final worker-local flush. Use Background + Timeout because ctx is already canceled.
 			if len(batch) > 0 {
 				fCtx, cancel := context.WithTimeout(context.Background(), p.writeTimeout)
-				p.flushBatch(fCtx, batch, msgIDs)
+				if err := p.flushBatch(fCtx, batch, msgIDs); err != nil {
+					slog.Error("final worker flush failed", "error", err, "group", p.groupName)
+				}
 				cancel()
 			}
-			// Trigger global drain. Only one worker will execute the actual logic.
 			p.drainOnce.Do(p.drainStream)
 			return
 		case <-ticker.C:
 			if len(batch) > 0 {
-				p.flushBatch(ctx, batch, msgIDs)
-				batch = batch[:0]
-				msgIDs = msgIDs[:0]
+				if err := p.flushBatch(ctx, batch, msgIDs); err == nil {
+					batch = batch[:0]
+					msgIDs = msgIDs[:0]
+				}
 			}
 		default:
+			readCount := int64(p.batchSize - len(batch))
+			if readCount <= 0 {
+				if err := p.flushBatch(ctx, batch, msgIDs); err == nil {
+					batch = batch[:0]
+					msgIDs = msgIDs[:0]
+					ticker.Reset(p.flushInt)
+				} else {
+					time.Sleep(100 * time.Millisecond)
+				}
+				continue
+			}
+
 			streams, err := p.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 				Group:    p.groupName,
 				Consumer: p.consumerID,
 				Streams:  []string{p.streamName, ">"},
-				Count:    int64(p.batchSize - len(batch)),
+				Count:    readCount,
 				Block:    p.flushInt,
 			}).Result()
 
 			if err != nil {
-				if err != redis.Nil && ctx.Err() == nil {
+				if err != redis.Nil && !errors.Is(err, context.Canceled) {
 					slog.Error("failed to read from redis stream", "error", err)
 					time.Sleep(time.Second)
 				}
@@ -188,15 +197,15 @@ func (p *StreamConsumer) worker(ctx context.Context) {
 
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
-					evt := p.parseMessage(msg.Values)
-					batch = append(batch, evt)
+					batch = append(batch, p.parseMessage(msg.ID, msg.Values))
 					msgIDs = append(msgIDs, msg.ID)
 
 					if len(batch) >= p.batchSize {
-						p.flushBatch(ctx, batch, msgIDs)
-						batch = batch[:0]
-						msgIDs = msgIDs[:0]
-						ticker.Reset(p.flushInt)
+						if err := p.flushBatch(ctx, batch, msgIDs); err == nil {
+							batch = batch[:0]
+							msgIDs = msgIDs[:0]
+							ticker.Reset(p.flushInt)
+						}
 					}
 				}
 			}
@@ -205,59 +214,51 @@ func (p *StreamConsumer) worker(ctx context.Context) {
 }
 
 func (p *StreamConsumer) drainStream() {
-	// Create a fresh context for draining to avoid "context canceled" errors from the shutdown signal.
 	drainCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	slog.Info("starting exhaustive drain", "group", p.groupName)
+	slog.Info("starting drain", "group", p.groupName)
 
-	// 1. Recover PEL
-	p.recoverPending(drainCtx)
-
-	// 2. Read remaining from stream
 	for {
-		select {
-		case <-drainCtx.Done():
-			slog.Warn("drain timed out", "group", p.groupName)
+		p.recoverPending(drainCtx)
+
+		streams, err := p.rdb.XReadGroup(drainCtx, &redis.XReadGroupArgs{
+			Group:    p.groupName,
+			Consumer: p.consumerID,
+			Streams:  []string{p.streamName, ">"},
+			Count:    int64(p.batchSize),
+			Block:    500 * time.Millisecond,
+		}).Result()
+
+		if err != nil {
+			if err == redis.Nil {
+				slog.Info("drain finished", "group", p.groupName)
+				return
+			}
+			slog.Error("drain error", "error", err, "group", p.groupName)
 			return
-		default:
-			streams, err := p.rdb.XReadGroup(drainCtx, &redis.XReadGroupArgs{
-				Group:    p.groupName,
-				Consumer: p.consumerID,
-				Streams:  []string{p.streamName, ">"},
-				Count:    int64(p.batchSize),
-				Block:    500 * time.Millisecond,
-			}).Result()
+		}
 
-			if err != nil {
-				if err == redis.Nil {
-					slog.Info("drain finished: no more messages", "group", p.groupName)
-					return
-				}
-				slog.Error("drain error", "error", err, "group", p.groupName)
-				return
+		if len(streams) == 0 || len(streams[0].Messages) == 0 {
+			slog.Info("drain finished", "group", p.groupName)
+			return
+		}
+
+		for _, stream := range streams {
+			batch := make([]Event, 0, len(stream.Messages))
+			msgIDs := make([]string, 0, len(stream.Messages))
+			for _, msg := range stream.Messages {
+				batch = append(batch, p.parseMessage(msg.ID, msg.Values))
+				msgIDs = append(msgIDs, msg.ID)
 			}
-
-			if len(streams) == 0 || len(streams[0].Messages) == 0 {
-				slog.Info("drain finished: stream exhausted", "group", p.groupName)
-				return
-			}
-
-			for _, stream := range streams {
-				batch := make([]Event, 0, len(stream.Messages))
-				msgIDs := make([]string, 0, len(stream.Messages))
-				for _, msg := range stream.Messages {
-					batch = append(batch, p.parseMessage(msg.Values))
-					msgIDs = append(msgIDs, msg.ID)
-				}
-				p.flushBatch(drainCtx, batch, msgIDs)
-				slog.Info("drained batch during shutdown", "count", len(batch), "group", p.groupName)
+			if err := p.flushBatch(drainCtx, batch, msgIDs); err != nil {
+				slog.Error("drain flush failed", "error", err, "group", p.groupName)
 			}
 		}
 	}
 }
 
-func (p *StreamConsumer) parseMessage(values map[string]interface{}) Event {
+func (p *StreamConsumer) parseMessage(id string, values map[string]interface{}) Event {
 	evt := Event{}
 	if v, ok := values["click_id"].(string); ok {
 		evt.ClickID = v
@@ -277,26 +278,43 @@ func (p *StreamConsumer) parseMessage(values map[string]interface{}) Event {
 	if v, ok := values["ua"].(string); ok {
 		evt.UA = v
 	}
+
+	// Extract timestamp from Redis message ID (format: <ms>-<seq>)
+	parts := strings.Split(id, "-")
+	if len(parts) > 0 {
+		ms, err := strconv.ParseInt(parts[0], 10, 64)
+		if err == nil {
+			evt.CreatedAt = time.Unix(0, ms*int64(time.Millisecond))
+		}
+	}
+	if evt.CreatedAt.IsZero() {
+		evt.CreatedAt = time.Now()
+	}
+
 	return evt
 }
 
-func (p *StreamConsumer) flushBatch(ctx context.Context, batch []Event, msgIDs []string) {
+func (p *StreamConsumer) flushBatch(ctx context.Context, batch []Event, msgIDs []string) error {
 	if len(batch) == 0 {
-		return
+		return nil
 	}
 
-	// Use the provided ctx (which might be the drain context) for the store call.
 	err := p.store.StoreBatch(ctx, batch)
 	if err != nil {
-		slog.Error("CRITICAL: store failed, NOT ACKING", "error", err, "group", p.groupName, "size", len(batch))
-		return 
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("store failed, NOT ACKING", "error", err, "group", p.groupName, "size", len(batch))
+		}
+		return err
 	}
 
 	ackCtx, cancel := context.WithTimeout(ctx, p.writeTimeout)
 	defer cancel()
 	if err := p.rdb.XAck(ackCtx, p.streamName, p.groupName, msgIDs...).Err(); err != nil {
-		slog.Error("failed to ack", "error", err, "group", p.groupName)
+		if !errors.Is(err, context.Canceled) {
+			slog.Error("failed to ack", "error", err, "group", p.groupName)
+		}
 	}
+	return nil
 }
 
 func (p *StreamConsumer) recoverPending(ctx context.Context) {
@@ -320,12 +338,16 @@ func (p *StreamConsumer) recoverPending(ctx context.Context) {
 			msgIDs := make([]string, 0, len(entries[0].Messages))
 
 			for _, msg := range entries[0].Messages {
-				batch = append(batch, p.parseMessage(msg.Values))
+				batch = append(batch, p.parseMessage(msg.ID, msg.Values))
 				msgIDs = append(msgIDs, msg.ID)
 			}
 
-			p.flushBatch(ctx, batch, msgIDs)
-			slog.Info("recovered messages from PEL", "count", len(batch), "group", p.groupName)
+			if err := p.flushBatch(ctx, batch, msgIDs); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					slog.Error("recovery flush failed", "error", err, "group", p.groupName)
+				}
+				return
+			}
 		}
 	}
 }
@@ -358,7 +380,7 @@ func (p *StreamConsumer) claimStuckMessages(ctx context.Context) {
 		}).Result()
 
 		if err != nil {
-			if err != redis.Nil {
+			if err != redis.Nil && !errors.Is(err, context.Canceled) {
 				slog.Error("autoclaim failed", "error", err, "group", p.groupName)
 			}
 			return
@@ -369,11 +391,10 @@ func (p *StreamConsumer) claimStuckMessages(ctx context.Context) {
 			msgIDs := make([]string, 0, len(entries))
 
 			for _, msg := range entries {
-				batch = append(batch, p.parseMessage(msg.Values))
+				batch = append(batch, p.parseMessage(msg.ID, msg.Values))
 				msgIDs = append(msgIDs, msg.ID)
 			}
-			p.flushBatch(ctx, batch, msgIDs)
-			slog.Info("reclaimed messages", "count", len(entries), "group", p.groupName)
+			_ = p.flushBatch(ctx, batch, msgIDs)
 		}
 
 		if nextID == "0-0" {

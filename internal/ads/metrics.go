@@ -44,6 +44,6 @@ var (
 	// Filter Metrics
 	FilterBlockedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ad_filter_blocked_total",
-		Help: "Total number of events blocked by intelligent filters",
+		Help: "Total number of events blocked by filters",
 	}, []string{"reason"})
 )

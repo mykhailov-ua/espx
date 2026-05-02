@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
+// ClickHouseStore implements the EventStore interface for ClickHouse DB.
 type ClickHouseStore struct {
 	conn         driver.Conn
 	writeTimeout time.Duration
@@ -17,9 +18,10 @@ func NewClickHouseStore(conn driver.Conn, writeTimeout time.Duration) *ClickHous
 	return &ClickHouseStore{
 		conn:         conn,
 		writeTimeout: writeTimeout,
-	}
+		}
 }
 
+// StoreBatch performs synchronous batch insertion with exponential backoff.
 func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []Event) error {
 	if len(events) == 0 {
 		return nil
@@ -29,7 +31,6 @@ func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []Event) error 
 	waitTime := InitialWait
 
 	for i := 0; i <= MaxRetries; i++ {
-		// Use the context passed from the consumer, bounded by writeTimeout
 		dbCtx, cancel := context.WithTimeout(ctx, s.writeTimeout)
 		err = s.insertToClickHouse(dbCtx, events)
 		cancel()
@@ -84,14 +85,13 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []Event
 		}
 
 		for _, e := range evts {
-			// In ClickHouse, DateTime64 mapping usually accepts time.Time
 			err := batch.Append(
 				e.ClickID,
 				e.CampaignID,
 				e.IP,
 				e.UA,
 				string(e.Payload),
-				time.Now(), // Or actual event time
+				e.CreatedAt,
 			)
 			if err != nil {
 				return fmt.Errorf("append %s: %w", table, err)

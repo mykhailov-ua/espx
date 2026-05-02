@@ -1,32 +1,36 @@
 # Ad Event Processor
 
-High-performance Go backend for real-time, distributed ad event processing.
+Backend system for ad event ingestion and storage.
 
 ## Features
-- **Durable Ingestion**: Redis Streams for high-throughput, loss-resistant event hand-off.
-- **Atomic Aggregation**: Database-level exactly-once aggregation via SQL CTEs.
-- **Intelligent Filtering**: Distributed IP rate limiting and deduplication middleware.
-- **Stateless Scaling**: Horizontal scalability with zero in-memory state in workers.
-- **Observability**: Built-in Prometheus metrics, Grafana dashboards, and pprof profiling.
+- Ingestion via Redis Streams.
+- Dual storage: PostgreSQL (transactional) and ClickHouse (analytical).
+- IP rate limiting and event deduplication.
+- Horizontal scalability.
+- Prometheus metrics integration.
 
-## Docs
-- [**Architecture**](docs/architecture.md) - Internal logic & distributed lifecycle.
-- [**Development**](docs/development.md) - Setup, Testing & Tooling.
+## Documentation
+- [Architecture Specification](docs/architecture.md)
 
-## Quick Start
+## Requirements
+- Go 1.25+
+- PostgreSQL 16
+- ClickHouse 24.3
+- Redis 7
+
+## Execution
 ```bash
-# Start infrastructure (Postgres + Redis)
+# Infrastructure
 docker compose up -d
 
-# Run the test suite
+# Tests
 make test
 
-# Start the server
+# Server
 go run cmd/server/main.go
 ```
 
-## Monitoring
-- Prometheus: `:9095` (customizable)
-- Grafana: `:3005` (admin/admin)
-- Health: `GET /health`
-- Metrics: `GET /metrics`
+## Endpoints
+- `POST /track`: Event ingestion.
+- `GET /health`: System status.
+- `GET /metrics`: Prometheus metrics.

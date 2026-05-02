@@ -3,8 +3,8 @@
 Tooling, testing, and maintenance workflow.
 
 ## Requirements
-- **Go 1.25+**
-- **Docker & Docker Compose**
+- Go 1.25+
+- Docker & Docker Compose
 
 ## Makefile Targets
 

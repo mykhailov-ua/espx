@@ -34,7 +34,6 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
 	createdAts := make([]pgtype.Timestamptz, len(events))
 
 	defaultPayload := []byte("{}")
-	now := time.Now()
 
 	for i, evt := range events {
 		clickIDs[i] = evt.ClickID
@@ -47,8 +46,8 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
 		}
 		ipAddresses[i] = evt.IP
 		userAgents[i] = evt.UA
-		// Note: Ideally created_at should come from the event/stream timestamp
-		createdAts[i] = pgtype.Timestamptz{Time: now, Valid: true} 
+		// Use stable CreatedAt from event (derived from Redis ID) for idempotency.
+		createdAts[i] = pgtype.Timestamptz{Time: evt.CreatedAt, Valid: true}
 	}
 
 	var err error
