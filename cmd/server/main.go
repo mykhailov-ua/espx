@@ -13,6 +13,8 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	infra_repo "github.com/mykhailov-ua/ad-event-processor/internal/infra/repository"
+	"github.com/mykhailov-ua/ad-event-processor/internal/infra/budget"
 )
 
 func main() {
@@ -65,6 +67,13 @@ func main() {
 	pgStore := ads.NewPostgresStore(queries, time.Duration(cfg.WriteTimeoutMs)*time.Millisecond)
 	chStore := ads.NewClickHouseStore(chConn, time.Duration(cfg.WriteTimeoutMs)*time.Millisecond)
 
+	campaignRepo := infra_repo.NewCampaignRepo(queries)
+	customerRepo := infra_repo.NewCustomerRepo(queries)
+
+	budgetManager := budget.NewRedisBudgetManager(rdb, campaignRepo, 24*time.Hour)
+	syncWorker := budget.NewSyncWorker(rdb, campaignRepo, customerRepo, 5*time.Second)
+	go syncWorker.Start(ctx)
+
 	// StreamConsumer for PostgreSQL (group: ..._pg)
 	pgConsumer := ads.NewStreamConsumer(
 		pgStore,
@@ -96,6 +105,7 @@ func main() {
 	filterEngine := ads.NewFilterEngine(
 		ads.NewIPRateLimiter(rdb, cfg.RateLimitPerMin, 1*time.Minute),
 		ads.NewDuplicateEventFilter(rdb, time.Duration(cfg.DuplicateTTLSec)*time.Second),
+		ads.NewBudgetFilter(budgetManager, registry),
 	)
 
 	mux := ads.NewRouter(cfg, registry, pgConsumer, filterEngine)
