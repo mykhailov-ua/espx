@@ -47,9 +47,12 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
 		}
 		ipAddresses[i] = evt.IP
 		userAgents[i] = evt.UA
+		const secondsPerDay = 86400
+		unix := evt.CreatedAt.Unix()
+		midnight := (unix / secondsPerDay) * secondsPerDay
 		createdAts[i] = pgtype.Timestamptz{Time: evt.CreatedAt, Valid: true}
 		createdDates[i] = pgtype.Date{
-			Time:  time.Date(evt.CreatedAt.Year(), evt.CreatedAt.Month(), evt.CreatedAt.Day(), 0, 0, 0, 0, time.UTC),
+			Time:  time.Unix(midnight, 0).UTC(),
 			Valid: true,
 		}
 	}

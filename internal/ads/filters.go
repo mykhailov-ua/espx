@@ -3,10 +3,18 @@ package ads
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
 )
+
+var builderPool = sync.Pool{
+	New: func() any {
+		return &strings.Builder{}
+	},
+}
 
 var (
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
@@ -70,7 +78,14 @@ func (l *IPRateLimiter) Check(ctx context.Context, evt Event) error {
 		return nil // skip if no IP
 	}
 
-	key := "ratelimit:ip:" + evt.IP
+	sb := builderPool.Get().(*strings.Builder)
+	sb.Reset()
+	sb.Grow(13 + len(evt.IP))
+	sb.WriteString("ratelimit:ip:")
+	sb.WriteString(evt.IP)
+	key := sb.String()
+	builderPool.Put(sb)
+
 	windowMs := int64(l.window.Milliseconds())
 
 	res, err := l.rdb.Eval(ctx, rateLimitScript, []string{key}, windowMs, l.limit).Result()
@@ -106,7 +121,16 @@ func (f *DuplicateEventFilter) Check(ctx context.Context, evt Event) error {
 		return nil
 	}
 
-	key := "dup:" + evt.Type + ":" + evt.ClickID
+	sb := builderPool.Get().(*strings.Builder)
+	sb.Reset()
+	sb.Grow(5 + len(evt.Type) + len(evt.ClickID))
+	sb.WriteString("dup:")
+	sb.WriteString(evt.Type)
+	sb.WriteByte(':')
+	sb.WriteString(evt.ClickID)
+	key := sb.String()
+	builderPool.Put(sb)
+
 	ok, err := f.rdb.SetNX(ctx, key, "1", f.ttl).Result()
 	if err != nil {
 		// Fail open
