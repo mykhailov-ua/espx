@@ -108,8 +108,6 @@ func (p *StreamConsumer) Start(ctx context.Context) {
 
 	procCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
-
-	// Ensure consumer group exists
 	err := p.rdb.XGroupCreateMkStream(ctx, p.streamName, p.groupName, "0").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		slog.Error("failed to create consumer group", "error", err, "stream", p.streamName, "group", p.groupName)
@@ -180,13 +178,11 @@ func (p *StreamConsumer) worker(ctx context.Context, workerIdx int) {
 				}
 				fCancel()
 			}
-			// Each worker recovers its own PEL independently.
+			recoverCtx, recoverCancel := context.WithTimeout(context.Background(), p.writeTimeout)
 			// sync.Once.Do blocks all callers until the function completes,
 			// so by the time drainOnce runs, this worker's PEL is already clear.
-			recoverCtx, recoverCancel := context.WithTimeout(context.Background(), p.writeTimeout)
 			p.recoverPending(recoverCtx, workerID)
 			recoverCancel()
-			// One worker drains new unassigned messages from the stream.
 			p.drainOnce.Do(func() { p.drainNewMessages(workerID) })
 			return
 		case <-ticker.C:
@@ -387,8 +383,6 @@ func (p *StreamConsumer) flushBatch(ctx context.Context, batch []*domain.Event, 
 	return nil
 }
 
-// recoverPending re-processes messages stuck in the given consumer's PEL.
-// For fresh consumer names this is a no-op.
 func (p *StreamConsumer) recoverPending(ctx context.Context, consumerID string) {
 	for {
 		select {
@@ -444,10 +438,6 @@ func (p *StreamConsumer) janitor(ctx context.Context) {
 	}
 }
 
-// claimStuckMessages uses XAutoClaim to reclaim messages from dead consumers.
-// Claimed messages are immediately processed and ACKed, so the consumer ID
-// used here (p.consumerID) is a transient PEL holder — the entry is removed
-// upon successful ACK.
 func (p *StreamConsumer) claimStuckMessages(ctx context.Context) {
 	startID := "0-0"
 	for {

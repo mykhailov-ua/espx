@@ -66,7 +66,6 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 	}
 
 	if res == -1 {
-		// Cache miss: Load budget from PostgreSQL
 		camp, err := m.campaignRepo.GetByID(ctx, campaignID)
 		if err != nil {
 			return false, fmt.Errorf("failed to load campaign from db on cache miss: %w", err)
@@ -77,10 +76,9 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 			remaining = 0
 		}
 
-		// Seed Redis. SetNX prevents overwriting if another goroutine just seeded it
+		// Seed Redis with SetNX to prevent concurrent overwrite
 		m.rdb.SetNX(ctx, campaignKey, remaining, 24*time.Hour)
 
-		// Retry transaction
 		return m.CheckAndSpend(ctx, customerID, campaignID, clickID, amount)
 	}
 
