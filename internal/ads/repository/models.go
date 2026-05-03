@@ -5,16 +5,64 @@
 package repository
 
 import (
+	"database/sql/driver"
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type CampaignStatusType string
+
+const (
+	CampaignStatusTypeACTIVE    CampaignStatusType = "ACTIVE"
+	CampaignStatusTypePAUSED    CampaignStatusType = "PAUSED"
+	CampaignStatusTypeEXHAUSTED CampaignStatusType = "EXHAUSTED"
+)
+
+func (e *CampaignStatusType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = CampaignStatusType(s)
+	case string:
+		*e = CampaignStatusType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for CampaignStatusType: %T", src)
+	}
+	return nil
+}
+
+type NullCampaignStatusType struct {
+	CampaignStatusType CampaignStatusType `json:"campaign_status_type"`
+	Valid              bool               `json:"valid"` // Valid is true if CampaignStatusType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullCampaignStatusType) Scan(value interface{}) error {
+	if value == nil {
+		ns.CampaignStatusType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.CampaignStatusType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullCampaignStatusType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.CampaignStatusType), nil
+}
+
 type Campaign struct {
-	ID        pgtype.UUID        `json:"id"`
-	Name      string             `json:"name"`
-	Status    string             `json:"status"`
-	Budget    pgtype.Numeric     `json:"budget"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	Status       CampaignStatusType `json:"status"`
+	BudgetLimit  pgtype.Numeric     `json:"budget_limit"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	CustomerID   pgtype.UUID        `json:"customer_id"`
+	CurrentSpend pgtype.Numeric     `json:"current_spend"`
 }
 
 type CampaignStat struct {
@@ -23,6 +71,15 @@ type CampaignStat struct {
 	ImpressionsCount int64       `json:"impressions_count"`
 	ClicksCount      int64       `json:"clicks_count"`
 	ConversionsCount int64       `json:"conversions_count"`
+}
+
+type Customer struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
+	Balance   pgtype.Numeric     `json:"balance"`
+	Currency  string             `json:"currency"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Event struct {

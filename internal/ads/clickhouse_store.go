@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 )
 
-// ClickHouseStore implements the EventStore interface for ClickHouse DB.
 type ClickHouseStore struct {
 	conn         driver.Conn
 	writeTimeout time.Duration
@@ -22,7 +22,7 @@ func NewClickHouseStore(conn driver.Conn, writeTimeout time.Duration) *ClickHous
 }
 
 // StoreBatch performs synchronous batch insertion with exponential backoff.
-func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []Event) error {
+func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []*domain.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
@@ -56,15 +56,15 @@ func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []Event) error 
 	return err
 }
 
-func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []Event) error {
+func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*domain.Event) error {
 	start := time.Now()
 
-	imps := make([]*Event, 0, len(events))
-	clicks := make([]*Event, 0, len(events))
-	convs := make([]*Event, 0, len(events))
+	imps := make([]*domain.Event, 0, len(events))
+	clicks := make([]*domain.Event, 0, len(events))
+	convs := make([]*domain.Event, 0, len(events))
 
 	for i := range events {
-		e := &events[i]
+		e := events[i]
 		switch e.Type {
 		case "impression":
 			imps = append(imps, e)
@@ -75,7 +75,7 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []Event
 		}
 	}
 
-	insert := func(table string, evts []*Event) error {
+	insert := func(table string, evts []*domain.Event) error {
 		if len(evts) == 0 {
 			return nil
 		}

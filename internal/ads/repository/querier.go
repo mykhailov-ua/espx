@@ -13,7 +13,9 @@ import (
 type Querier interface {
 	CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error)
 	GetCampaign(ctx context.Context, id pgtype.UUID) (Campaign, error)
+	GetCampaignBudget(ctx context.Context, id pgtype.UUID) (GetCampaignBudgetRow, error)
 	GetCampaignStats(ctx context.Context, campaignID pgtype.UUID) ([]CampaignStat, error)
+	GetCustomerByID(ctx context.Context, id pgtype.UUID) (Customer, error)
 	// Inserts a single event with ON CONFLICT for idempotency.
 	// created_date is set explicitly for correct dedup within daily partitions.
 	InsertEvent(ctx context.Context, arg InsertEventParams) error
@@ -23,9 +25,12 @@ type Querier interface {
 	// Invalid campaign_ids are filtered out before the stats insert to prevent FK violations
 	// from rolling back the entire batch.
 	InsertEventsBatch(ctx context.Context, arg InsertEventsBatchParams) error
+	ListActiveCampaigns(ctx context.Context) ([]Campaign, error)
 	ListCampaignIDs(ctx context.Context) ([]pgtype.UUID, error)
+	UpdateCampaignSpend(ctx context.Context, arg UpdateCampaignSpendParams) error
 	UpdateCampaignStats(ctx context.Context, arg UpdateCampaignStatsParams) error
 	UpdateCampaignStatsBatch(ctx context.Context, arg UpdateCampaignStatsBatchParams) error
+	UpdateCustomerBalance(ctx context.Context, arg UpdateCustomerBalanceParams) error
 }
 
 var _ Querier = (*Queries)(nil)

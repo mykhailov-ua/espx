@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
+	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 )
 
 type PostgresStore struct {
@@ -20,7 +21,7 @@ func NewPostgresStore(queries repository.Querier, writeTimeout time.Duration) *P
 	}
 }
 
-func (s *PostgresStore) StoreBatch(ctx context.Context, events []Event) error {
+func (s *PostgresStore) StoreBatch(ctx context.Context, events []*domain.Event) error {
 	if len(events) == 0 {
 		return nil
 	}
