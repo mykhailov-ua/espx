@@ -78,7 +78,8 @@ services:
     image: redis:${REDIS_VERSION}
     env_file:
       - .env
-    # No host port exposure — accessible only within 'database' network.
+    ports:
+      - "${REDIS_PORT}:${REDIS_PORT}"
     command: ["redis-server", "--port", "${REDIS_PORT}", "--requirepass", "${REDIS_PASSWORD}"]
     deploy:
       resources:
