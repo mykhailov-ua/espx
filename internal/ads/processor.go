@@ -178,7 +178,6 @@ func (p *StreamConsumer) worker(ctx context.Context, workerIdx int) {
 				for _, e := range batch {
 					domain.EventPool.Put(e)
 				}
-				batch = batch[:0]
 				fCancel()
 			}
 			// Each worker recovers its own PEL independently.

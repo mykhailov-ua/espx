@@ -43,7 +43,7 @@ func TestCampaignQueries(t *testing.T) {
 	inactiveID := uuid.New()
 	_, err = pool.Exec(ctx,
 		"INSERT INTO campaigns (id, name, status) VALUES ($1, $2, $3)",
-		inactiveID, "Inactive Campaign", "inactive")
+		inactiveID, "Inactive Campaign", "PAUSED")
 	require.NoError(t, err)
 
 	ids, err = queries.ListCampaignIDs(ctx)
@@ -110,8 +110,8 @@ func TestInvalidEventType(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx,
-		"INSERT INTO events (id, campaign_id, event_type, payload) VALUES ($1, $2, $3, $4)",
-		uuid.New(), campaignID, "invalid_type", "{}")
+		"INSERT INTO events (click_id, campaign_id, event_type, payload, created_date) VALUES ($1, $2, $3, $4, CURRENT_DATE)",
+		uuid.New().String(), campaignID, "invalid_type", "{}")
 
 	assert.Error(t, err)
 }

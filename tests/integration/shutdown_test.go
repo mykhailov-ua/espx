@@ -47,8 +47,11 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	pm := database.NewPartitionManager(pool, 7, 1)
 	require.NoError(t, pm.Run(ctx))
 
+	customerID := uuid.New()
+	_, _ = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Shutdown Customer", 1000.00)
+
 	campaignID := uuid.New()
-	_, err := pool.Exec(ctx, "INSERT INTO campaigns (id, name, status) VALUES ($1, $2, $3)", campaignID, "Shutdown Test", "ACTIVE")
+	_, err := pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Shutdown Test", "ACTIVE", customerID, 1000.00)
 	require.NoError(t, err)
 
 	registry := ads.NewRegistry(queries)

@@ -48,8 +48,12 @@ func TestE2EFlow(t *testing.T) {
 	err := partManager.Run(ctx)
 	require.NoError(t, err)
 
+	customerID := uuid.New()
+	_, err = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Test Customer", 1000.00)
+	require.NoError(t, err)
+
 	campaignID := uuid.New()
-	_, err = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status) VALUES ($1, $2, $3)", campaignID, "E2E Campaign", "ACTIVE")
+	_, err = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "E2E Campaign", "ACTIVE", customerID, 100.00)
 	require.NoError(t, err)
 
 	registry := ads.NewRegistry(queries)
@@ -112,8 +116,11 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 		MaxWorkers:     2,
 	}
 
+	customerID := uuid.New()
+	_, _ = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Proto Customer", 1000.00)
+
 	campaignID := uuid.New()
-	_, _ = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status) VALUES ($1, $2, $3)", campaignID, "Proto Campaign", "ACTIVE")
+	_, _ = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Proto Campaign", "ACTIVE", customerID, 100.00)
 
 	registry := ads.NewRegistry(queries)
 	_, _ = registry.Sync(ctx)
