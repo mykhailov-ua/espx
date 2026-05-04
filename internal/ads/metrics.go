@@ -6,7 +6,6 @@ import (
 )
 
 var (
-	// HTTP Metrics
 	HttpRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ad_http_requests_total",
 		Help: "Total number of HTTP requests by status code",
@@ -18,7 +17,6 @@ var (
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "path"})
 
-	// Processor Metrics
 	EventsProcessed = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ad_events_processed_total",
 		Help: "Total number of events successfully accepted into Redis Streams",
@@ -29,7 +27,6 @@ var (
 		Help: "Total number of events dropped due to Redis ingestion failure",
 	})
 
-	// Database Metrics
 	DbWriteDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "ad_db_write_duration_seconds",
 		Help:    "Duration of database batch write operations",
@@ -41,7 +38,6 @@ var (
 		Help: "Total number of database write errors",
 	}, []string{"type"})
 
-	// Filter Metrics
 	FilterBlockedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ad_filter_blocked_total",
 		Help: "Total number of events blocked by filters",

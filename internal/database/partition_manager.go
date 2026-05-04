@@ -109,7 +109,6 @@ func (pm *PartitionManager) dropPartitions(ctx context.Context, now time.Time, o
 
 		if len(partitionName) == 18 && partitionName[:len(prefix)] == prefix {
 			dateStr := partitionName[len(prefix):]
-			// Drop if older than retention or too far in the future
 			if dateStr < thresholdStr || dateStr > futureThresholdStr {
 				partitionsToDrop = append(partitionsToDrop, partitionName)
 			}
@@ -140,7 +139,6 @@ func (pm *PartitionManager) truncateDefault(ctx context.Context) error {
 	return nil
 }
 
-// StartBackground starts a background goroutine that runs maintenance daily.
 func (pm *PartitionManager) StartBackground(ctx context.Context) {
 	go func() {
 		if err := pm.Run(ctx); err != nil {

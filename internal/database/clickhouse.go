@@ -15,7 +15,6 @@ func ConnectClickHouse(ctx context.Context, dsn string) (driver.Conn, error) {
 		return nil, fmt.Errorf("failed to parse clickhouse dsn: %w", err)
 	}
 
-	// Native protocol options
 	opts.Settings = clickhouse.Settings{
 		"max_execution_time": 60,
 	}

@@ -21,7 +21,6 @@ func NewClickHouseStore(conn driver.Conn, writeTimeout time.Duration) *ClickHous
 	}
 }
 
-// StoreBatch performs synchronous batch insertion with exponential backoff.
 func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []*domain.Event) error {
 	if len(events) == 0 {
 		return nil

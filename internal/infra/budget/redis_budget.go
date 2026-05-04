@@ -76,7 +76,6 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 			remaining = 0
 		}
 
-		// Seed Redis with SetNX to prevent concurrent overwrite
 		m.rdb.SetNX(ctx, campaignKey, remaining, 24*time.Hour)
 
 		return m.CheckAndSpend(ctx, customerID, campaignID, clickID, amount)
