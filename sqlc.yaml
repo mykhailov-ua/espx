@@ -12,3 +12,15 @@ sql:
         emit_prepared_queries: false
         emit_interface: true
         emit_exact_table_names: false
+  - schema: "internal/auth/repository/migrations"
+    queries: "internal/auth/repository/queries"
+    engine: "postgresql"
+    gen:
+      go:
+        package: "repository"
+        out: "internal/auth/repository"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_prepared_queries: false
+        emit_interface: true
+        emit_exact_table_names: false
