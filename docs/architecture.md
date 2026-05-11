@@ -2,7 +2,13 @@
 
 Technical overview of the ad event ingestion pipeline and storage architecture.
 
-## Ingestion Pipeline
+## System Design
+
+The system is partitioned into two functional domains to isolate network ingestion from intensive database I/O:
+1.  **Tracker (Ingress)**: Stateless HTTP server that validates and persists events to Redis Streams.
+2.  **Processor (Egress)**: Stateful consumer workers that read from Redis Streams and write to PostgreSQL and ClickHouse.
+
+## Ingestion Pipeline (Tracker)
 
 ### HTTP Ingress
 *   **Protocol**: HTTP/1.1 or HTTP/3 (via Caddy).
@@ -22,11 +28,11 @@ Technical overview of the ad event ingestion pipeline and storage architecture.
 ### Message Backbone (Redis Streams)
 *   **Stream**: `ad:events:stream`.
 *   **Retention**: `MAXLEN ~100000`.
-*   **Consumer Groups**: Separate groups for PostgreSQL and ClickHouse sinks.
+*   **Consumer Groups**: Separate groups (`group_pg`, `group_ch`) for PostgreSQL and ClickHouse sinks to allow independent scaling and failure isolation.
 
-## Storage Strategy (T-Split)
+## Processing Strategy (Processor)
 
-Events are consumed by multiple `StreamConsumer` instances using separate Redis Consumer Groups.
+Events are consumed by `StreamConsumer` instances using separate Redis Consumer Groups.
 
 ### PostgreSQL Sink (`group_pg`)
 *   **Data**: Event logs and real-time statistics.
@@ -40,23 +46,33 @@ Events are consumed by multiple `StreamConsumer` instances using separate Redis 
 *   **Table Engine**: `ReplacingMergeTree`.
 *   **Batch Size**: 50,000 events.
 
-## Reliability Mechanisms
+## Reliability and Fault Tolerance
 
-### Poison Pill Protection
-Workers implement a `maxRetries` threshold (5). Batches exceeding this limit are forcibly acknowledged and logged as "Poison Pills" to prevent pipeline stalls caused by permanent data constraints.
+### Circuit Breaker
+Each `StreamConsumer` implements a lock-free state machine (Circuit Breaker) to protect downstream databases from cascading failures.
+*   **Trigger**: Trips to `Open` state after `failThreshold` consecutive failures.
+*   **Behavior**: When `Open`, the consumer pauses `XReadGroup` calls for a `openTimeout` duration.
+*   **Recovery**: Transitions to `HalfOpen` for a single probe request. If successful, it returns to `Closed`.
 
-### Pending Entries List (PEL) Recovery
-Consumers recover assigned messages (ID "0") on startup and during graceful shutdown to ensure zero data loss.
+### Dead Letter Queue (DLQ)
+Messages that fail processing after `maxRetries` (5) are moved to the `ad:events:dlq` stream.
+*   **Metadata**: DLQ entries include original message IDs, error messages, retry counts, and timestamps.
+*   **Rationale**: Prevents "Poison Pills" from blocking the main pipeline while preserving erroneous events for manual inspection or replay.
 
 ### XAutoClaim Janitor
-Background task reclaims messages from inactive consumers (>5 mins idle).
+Background task reclaims messages from inactive consumers (>5 mins idle) to ensure processing continuity during worker crashes.
 
 ### Memory Hardening
 `domain.Event` pool implements a safety cap on buffer capacity. Slices exceeding 4096 bytes are discarded during `Reset()` to prevent `sync.Pool` memory bloat under large-payload attacks.
 
+## Observability
+
+*   **Metrics**: Prometheus integration tracking ingestion rates, batch latencies, DLQ size, and Circuit Breaker states.
+*   **Tracing**: Trace ID propagation through `context.Context` (internal).
+
 ## Shutdown Sequence
 
-1.  HTTP Server: Graceful stop.
-2.  Consumer Shutdown: Signal workers to stop reading.
+1.  HTTP Server: Graceful stop (Tracker).
+2.  Consumer Shutdown: Signal workers to stop reading (Processor).
 3.  Drain Phase: Final buffer flush and PEL recovery using 15s timeout.
 4.  Connection Cleanup: Final close of Redis, PG, and CH pools.

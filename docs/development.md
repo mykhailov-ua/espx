@@ -5,42 +5,49 @@ Tooling, testing, and maintenance workflow.
 ## Requirements
 - Go 1.25+
 - Docker & Docker Compose
+- `buf` (for Protobuf generation)
 
 ## Makefile Targets
 
 | Target | Action |
 | :--- | :--- |
-| `make fmt` | Format code via `gofmt`. |
-| `make lint` | Run `golangci-lint` with `.golangci.yml`. |
+| `make fmt` | Format code via `go fmt`. |
+| `make lint` | Run `golangci-lint` for static analysis. |
 | `make test` | Run all tests (Unit + Integration). |
-| `make test-unit` | Run fast unit tests. |
-| `make test-int` | Run integration tests (requires Docker). |
-| `make build` | Build production Docker image. |
+| `make test-unit` | Run fast unit tests (`internal/...`). |
+| `make test-int` | Run integration tests (`tests/...`). |
+| `make build` | Build production Docker image (contains all binaries). |
+| `make proto` | Generate Go code from Protobuf definitions using `buf`. |
 
 ## Local Infrastructure
-Spin up full stack (Postgres, Redis, Prometheus, Grafana):
+Spin up full stack (Postgres, Redis, ClickHouse, Prometheus, Grafana):
 ```bash
 docker compose up -d
 ```
 
 ## Testing
 
-### Unit
-- `tests/unit/`
-- Isolated logic testing. Uses **Testcontainers** for fast, ephemeral Redis/Postgres testing when needed.
+### Unit Tests
+- Location: `internal/...`
+- Purpose: Logic validation for isolated packages.
+- Execution: `make test-unit`
 
-### Integration
-- `tests/integration/`
-- End-to-end flow validation using real containers.
-- Covers: Graceful Shutdown, Stream recovery, and SQL CTE aggregation accuracy.
+### Integration Tests
+- Location: `tests/`
+- Purpose: End-to-end flow validation requiring real infrastructure.
+- Scenarios:
+    - `e2e_test.go`: Full ingestion-to-storage flow.
+    - `shutdown_test.go`: Graceful stop and drain logic.
+    - `budget_integration_test.go`: Redis/Postgres budget reconciliation.
+    - `circuit_breaker_integration_test.go`: Behavior during database outages.
 
 ## CI/CD
-GitHub Actions workflow:
-1. **Lint**: Style and static analysis.
-2. **Test**: Full suite (Unit + Integration).
-3. **Build**: Docker build validation.
+GitHub Actions workflow performs:
+1. **Lint**: Code style and static analysis.
+2. **Test**: Concurrent execution of unit and integration suites.
+3. **Build**: Multi-stage Docker build validation.
 
-## Metrics & UI
-- **Prometheus**: `http://localhost:9095`
-- **Grafana**: `http://localhost:3005` (admin/admin)
-- **pprof**: `http://localhost:8085/debug/pprof/` (if SERVER_PORT is 8085)
+## Observability
+- **Prometheus**: `http://localhost:9095` (Scrapes `tracker` and `processor`).
+- **Grafana**: `http://localhost:3005` (Provisioned with dashboards).
+- **pprof**: Enabled via environment variables on specific ports.
