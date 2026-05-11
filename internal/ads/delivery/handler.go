@@ -1,4 +1,4 @@
-package ads
+package delivery
 
 import (
 	"bytes"
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
@@ -34,7 +35,7 @@ var (
 	}
 )
 
-func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *StreamConsumer, filterEngine *FilterEngine) http.Handler {
+func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *ads.StreamConsumer, filterEngine *ads.FilterEngine) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /metrics", promhttp.Handler())
@@ -56,11 +57,10 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 
 		defer func() {
 			duration := time.Since(start).Seconds()
-			HttpRequestsTotal.WithLabelValues("POST", "/track", strconv.Itoa(status)).Inc()
-			HttpRequestDuration.WithLabelValues("POST", "/track").Observe(duration)
+			ads.HttpRequestsTotal.WithLabelValues("POST", "/track", strconv.Itoa(status)).Inc()
+			ads.HttpRequestDuration.WithLabelValues("POST", "/track").Observe(duration)
 		}()
 
-		// Prevent OOM by limiting request body size to 1MB
 		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxRequestBodySize)
 
 		requestID := uuid.New().String()
@@ -141,7 +141,6 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 			}
 		}
 
-		// Hot-path validation using in-memory registry to avoid DB Foreign Key overhead.
 		if !registry.Exists(campaignID) {
 			l.Warn("campaign not found", "campaign_id", campaignID)
 			status = http.StatusNotFound
@@ -160,21 +159,19 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 
 		if filterEngine != nil {
 			if err := filterEngine.Check(r.Context(), evt); err != nil {
-				if errors.Is(err, ErrRateLimitExceeded) {
+				if errors.Is(err, ads.ErrRateLimitExceeded) {
 					l.Warn("event rejected: rate limit", "error", err)
 					http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 					return
-				} else if errors.Is(err, ErrDuplicateEvent) {
+				} else if errors.Is(err, ads.ErrDuplicateEvent) {
 					l.Warn("event rejected: duplicate", "error", err)
 					http.Error(w, "duplicate event", http.StatusConflict)
 					return
-				} else if errors.Is(err, ErrBudgetExhausted) {
+				} else if errors.Is(err, ads.ErrBudgetExhausted) {
 					l.Warn("event rejected: budget exhausted", "error", err)
 					http.Error(w, "budget exhausted", http.StatusPaymentRequired)
 					return
 				}
-
-				// Fail-open for infrastructure errors (e.g., Redis down)
 				l.Error("filter engine degraded (fail-open)", "error", err)
 			}
 		}
@@ -230,7 +227,6 @@ func extractClientIP(r *http.Request) string {
 	}
 
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Optimization: avoid strings.Split. Parse from right to left to find first non-private IP.
 		last := len(xff)
 		for i := len(xff) - 1; i >= -1; i-- {
 			if i == -1 || xff[i] == ',' {

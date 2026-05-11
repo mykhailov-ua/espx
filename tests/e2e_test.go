@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
+	ads_delivery "github.com/mykhailov-ua/ad-event-processor/internal/ads/delivery"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
@@ -66,7 +67,7 @@ func TestE2EFlow(t *testing.T) {
 	eventProc.Start(ctx)
 	defer eventProc.Close()
 
-	router := ads.NewRouter(cfg, registry, eventProc, nil)
+	router := ads_delivery.NewRouter(cfg, registry, eventProc, nil)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 
@@ -134,7 +135,7 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 	eventProc.Start(ctx)
 	defer eventProc.Close()
 
-	router := ads.NewRouter(cfg, registry, eventProc, nil)
+	router := ads_delivery.NewRouter(cfg, registry, eventProc, nil)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

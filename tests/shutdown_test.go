@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
+	ads_delivery "github.com/mykhailov-ua/ad-event-processor/internal/ads/delivery"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
@@ -62,7 +63,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	eventProc := ads.NewStreamConsumer(store, rdb, "shutdown-stream", "shutdown-group", "shutdown-c1", cfg.EventBatchSize, cfg.MaxWorkers, 100*time.Millisecond, 5*time.Second, 100000, 100*time.Millisecond, 5*time.Second, 5, 5*time.Minute)
 	eventProc.Start(ctx)
 
-	router := ads.NewRouter(cfg, registry, eventProc, nil)
+	router := ads_delivery.NewRouter(cfg, registry, eventProc, nil)
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

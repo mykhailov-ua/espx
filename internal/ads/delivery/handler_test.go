@@ -1,4 +1,4 @@
-package ads
+package delivery
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/redis/go-redis/v9"
@@ -24,7 +25,6 @@ func (m *mockRegistry) Sync(ctx context.Context) (int, error)                 { 
 func (m *mockRegistry) StartSync(ctx context.Context, interval time.Duration) {}
 func (m *mockRegistry) Wait()                                                 {}
 
-// mockRedis is a minimal mock for redis.UniversalClient
 type mockRedis struct {
 	redis.UniversalClient
 }
@@ -37,12 +37,10 @@ func (m *mockRedis) XAdd(ctx context.Context, a *redis.XAddArgs) *redis.StringCm
 
 func BenchmarkTrackHandlerJSON(b *testing.B) {
 	cfg := &config.Config{
-		ServerPort: "8080",
+		MaxRequestBodySize: 1024 * 1024,
 	}
 	registry := &mockRegistry{}
-	proc := &StreamConsumer{
-		rdb: &mockRedis{},
-	}
+	proc := ads.NewStreamConsumer(nil, &mockRedis{}, "s", "g", "c", 10, 1, 100*time.Millisecond, 1*time.Second, 1000, 10*time.Millisecond, 100*time.Millisecond, 3, 1*time.Minute)
 	handler := NewRouter(cfg, registry, proc, nil)
 
 	payload := map[string]interface{}{
@@ -66,12 +64,10 @@ func BenchmarkTrackHandlerJSON(b *testing.B) {
 
 func BenchmarkTrackHandlerProto(b *testing.B) {
 	cfg := &config.Config{
-		ServerPort: "8080",
+		MaxRequestBodySize: 1024 * 1024,
 	}
 	registry := &mockRegistry{}
-	proc := &StreamConsumer{
-		rdb: &mockRedis{},
-	}
+	proc := ads.NewStreamConsumer(nil, &mockRedis{}, "s", "g", "c", 10, 1, 100*time.Millisecond, 1*time.Second, 1000, 10*time.Millisecond, 100*time.Millisecond, 3, 1*time.Minute)
 	handler := NewRouter(cfg, registry, proc, nil)
 
 	pbPayload := &pb.AdEvent{
