@@ -28,3 +28,34 @@ RETURNING id, name, expires_at, created_at;
 SELECT id, name, expires_at, created_at
 FROM api_keys
 WHERE user_id = $1;
+
+-- name: CreateSession :one
+INSERT INTO sessions (id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at;
+
+-- name: GetSession :one
+SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+FROM sessions
+WHERE id = $1;
+
+-- name: GetSessionByRefreshToken :one
+SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+FROM sessions
+WHERE refresh_token = $1;
+
+-- name: GetSessionByRefreshTokenForUpdate :one
+SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+FROM sessions
+WHERE refresh_token = $1
+FOR UPDATE;
+
+-- name: BlockSession :exec
+UPDATE sessions
+SET is_blocked = TRUE
+WHERE id = $1;
+
+-- name: BlockSessionByRefreshToken :exec
+UPDATE sessions
+SET is_blocked = TRUE
+WHERE refresh_token = $1;

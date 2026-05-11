@@ -11,9 +11,15 @@ import (
 )
 
 type Querier interface {
+	BlockSession(ctx context.Context, id pgtype.UUID) error
+	BlockSessionByRefreshToken(ctx context.Context, refreshToken string) error
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (CreateAPIKeyRow, error)
+	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKeyByHashRow, error)
+	GetSession(ctx context.Context, id pgtype.UUID) (Session, error)
+	GetSessionByRefreshToken(ctx context.Context, refreshToken string) (Session, error)
+	GetSessionByRefreshTokenForUpdate(ctx context.Context, refreshToken string) (Session, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	ListUserAPIKeys(ctx context.Context, userID pgtype.UUID) ([]ListUserAPIKeysRow, error)

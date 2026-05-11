@@ -11,6 +11,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const blockSession = `-- name: BlockSession :exec
+UPDATE sessions
+SET is_blocked = TRUE
+WHERE id = $1
+`
+
+func (q *Queries) BlockSession(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, blockSession, id)
+	return err
+}
+
+const blockSessionByRefreshToken = `-- name: BlockSessionByRefreshToken :exec
+UPDATE sessions
+SET is_blocked = TRUE
+WHERE refresh_token = $1
+`
+
+func (q *Queries) BlockSessionByRefreshToken(ctx context.Context, refreshToken string) error {
+	_, err := q.db.Exec(ctx, blockSessionByRefreshToken, refreshToken)
+	return err
+}
+
 const createAPIKey = `-- name: CreateAPIKey :one
 INSERT INTO api_keys (key_hash, user_id, name, expires_at)
 VALUES ($1, $2, $3, $4)
@@ -18,17 +40,17 @@ RETURNING id, name, expires_at, created_at
 `
 
 type CreateAPIKeyParams struct {
-	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	KeyHash   string             `json:"key_hash"`
-	Name      string             `json:"name"`
 	UserID    pgtype.UUID        `json:"user_id"`
+	Name      string             `json:"name"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 }
 
 type CreateAPIKeyRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	Name      string             `json:"name"`
-	ID        pgtype.UUID        `json:"id"`
 }
 
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (CreateAPIKeyRow, error) {
@@ -42,6 +64,46 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Cre
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createSession = `-- name: CreateSession :one
+INSERT INTO sessions (id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+`
+
+type CreateSessionParams struct {
+	ID           pgtype.UUID        `json:"id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	RefreshToken string             `json:"refresh_token"`
+	UserAgent    string             `json:"user_agent"`
+	ClientIp     string             `json:"client_ip"`
+	IsBlocked    bool               `json:"is_blocked"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
+	row := q.db.QueryRow(ctx, createSession,
+		arg.ID,
+		arg.UserID,
+		arg.RefreshToken,
+		arg.UserAgent,
+		arg.ClientIp,
+		arg.IsBlocked,
+		arg.ExpiresAt,
+	)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RefreshToken,
+		&i.UserAgent,
+		&i.ClientIp,
+		&i.IsBlocked,
 		&i.ExpiresAt,
 		&i.CreatedAt,
 	)
@@ -62,11 +124,11 @@ type CreateUserParams struct {
 }
 
 type CreateUserRow struct {
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	ID         pgtype.UUID        `json:"id"`
 	Email      string             `json:"email"`
 	Role       string             `json:"role"`
-	ID         pgtype.UUID        `json:"id"`
 	CustomerID pgtype.UUID        `json:"customer_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error) {
@@ -95,11 +157,11 @@ WHERE ak.key_hash = $1 AND (ak.expires_at IS NULL OR ak.expires_at > NOW())
 `
 
 type GetAPIKeyByHashRow struct {
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
-	Name       string             `json:"name"`
-	Role       string             `json:"role"`
 	ID         pgtype.UUID        `json:"id"`
 	UserID     pgtype.UUID        `json:"user_id"`
+	Name       string             `json:"name"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	Role       string             `json:"role"`
 	CustomerID pgtype.UUID        `json:"customer_id"`
 }
 
@@ -113,6 +175,73 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 		&i.ExpiresAt,
 		&i.Role,
 		&i.CustomerID,
+	)
+	return i, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+FROM sessions
+WHERE id = $1
+`
+
+func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (Session, error) {
+	row := q.db.QueryRow(ctx, getSession, id)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RefreshToken,
+		&i.UserAgent,
+		&i.ClientIp,
+		&i.IsBlocked,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSessionByRefreshToken = `-- name: GetSessionByRefreshToken :one
+SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+FROM sessions
+WHERE refresh_token = $1
+`
+
+func (q *Queries) GetSessionByRefreshToken(ctx context.Context, refreshToken string) (Session, error) {
+	row := q.db.QueryRow(ctx, getSessionByRefreshToken, refreshToken)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RefreshToken,
+		&i.UserAgent,
+		&i.ClientIp,
+		&i.IsBlocked,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSessionByRefreshTokenForUpdate = `-- name: GetSessionByRefreshTokenForUpdate :one
+SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
+FROM sessions
+WHERE refresh_token = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetSessionByRefreshTokenForUpdate(ctx context.Context, refreshToken string) (Session, error) {
+	row := q.db.QueryRow(ctx, getSessionByRefreshTokenForUpdate, refreshToken)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.RefreshToken,
+		&i.UserAgent,
+		&i.ClientIp,
+		&i.IsBlocked,
+		&i.ExpiresAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -166,10 +295,10 @@ WHERE user_id = $1
 `
 
 type ListUserAPIKeysRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	Name      string             `json:"name"`
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	Name      string             `json:"name"`
-	ID        pgtype.UUID        `json:"id"`
 }
 
 func (q *Queries) ListUserAPIKeys(ctx context.Context, userID pgtype.UUID) ([]ListUserAPIKeysRow, error) {

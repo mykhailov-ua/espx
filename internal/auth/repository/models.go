@@ -9,20 +9,31 @@ import (
 )
 
 type ApiKey struct {
+	ID        pgtype.UUID        `json:"id"`
+	KeyHash   string             `json:"key_hash"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Name      string             `json:"name"`
 	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	KeyHash   string             `json:"key_hash"`
-	Name      string             `json:"name"`
-	ID        pgtype.UUID        `json:"id"`
-	UserID    pgtype.UUID        `json:"user_id"`
+}
+
+type Session struct {
+	ID           pgtype.UUID        `json:"id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	RefreshToken string             `json:"refresh_token"`
+	UserAgent    string             `json:"user_agent"`
+	ClientIp     string             `json:"client_ip"`
+	IsBlocked    bool               `json:"is_blocked"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type User struct {
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID           pgtype.UUID        `json:"id"`
 	Email        string             `json:"email"`
 	PasswordHash string             `json:"password_hash"`
 	Role         string             `json:"role"`
-	ID           pgtype.UUID        `json:"id"`
 	CustomerID   pgtype.UUID        `json:"customer_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
