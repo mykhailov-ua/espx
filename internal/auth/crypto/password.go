@@ -95,7 +95,6 @@ func (h *PasswordHasher) HashPassword(password string) (string, error) {
 	return encodedHash, nil
 }
 
-
 func VerifyPassword(password, encodedHash string) (bool, error) {
 	if password == "" || len(password) > MaxPasswordLength {
 		return false, ErrAuthenticationFailed

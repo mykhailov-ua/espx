@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/auth/crypto"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/repository"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/token"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/crypto"
 )
 
 type mockRepo struct {
@@ -53,8 +53,8 @@ func TestServiceMetrics(t *testing.T) {
 
 	repo.err = nil
 	repo.user = repository.User{PasswordHash: "$argon2id$v=19$m=65536,t=3,p=4$some-salt$some-hash"}
-	
-	repo.user.PasswordHash = "invalid-hash-format" 
+
+	repo.user.PasswordHash = "invalid-hash-format"
 	_, err = service.Login(context.Background(), "test@example.com", "password", time.Hour)
 	if err == nil {
 		t.Fatal("expected error for invalid hash format, got nil")

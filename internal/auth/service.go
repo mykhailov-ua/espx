@@ -109,7 +109,7 @@ func (s *Service) Login(ctx context.Context, email, password string, duration ti
 	}
 
 	match, err := crypto.VerifyPassword(password, hashToVerify)
-	
+
 	if !userFound || err != nil || !match {
 		s.metrics.InvalidCredentials.Add(1)
 		s.metrics.FailedLoginsTotal.Add(1)

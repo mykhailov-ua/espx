@@ -114,7 +114,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 						bufferPool.Put(buf)
 					}
 				}()
-				
+
 				enc := json.NewEncoder(buf)
 				_ = enc.Encode(pbReq.Metadata)
 				payload = make([]byte, buf.Len())
@@ -193,7 +193,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 			resp := trackResponsePool.Get().(*pb.TrackResponse)
 			resp.Reset()
 			defer trackResponsePool.Put(resp)
-			
+
 			resp.RequestId = requestID
 			resp.Status = "accepted"
 
@@ -204,7 +204,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 		} else {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
-			
+
 			buf := bufferPool.Get().(*bytes.Buffer)
 			buf.Reset()
 			defer func() {
@@ -212,7 +212,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, proc *Strea
 					bufferPool.Put(buf)
 				}
 			}()
-			
+
 			_, _ = buf.WriteString(`{"request_id":"`)
 			_, _ = buf.WriteString(requestID)
 			_, _ = buf.WriteString(`","status":"accepted"}`)

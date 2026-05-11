@@ -2,12 +2,17 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
+	"github.com/mykhailov-ua/ad-event-processor/internal/auth/token"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -33,7 +38,7 @@ func (h *Handler) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Re
 		CustomerID: customerID,
 	})
 	if err != nil {
-		return nil, err
+		return nil, mapError(err)
 	}
 
 	return &pb.RegisterResponse{
@@ -49,7 +54,7 @@ func (h *Handler) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRes
 
 	resp, err := h.service.Login(ctx, req.Email, req.Password, duration)
 	if err != nil {
-		return nil, err
+		return nil, mapError(err)
 	}
 
 	return &pb.LoginResponse{
@@ -65,5 +70,34 @@ func (h *Handler) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRes
 }
 
 func (h *Handler) VerifyToken(ctx context.Context, req *pb.VerifyTokenRequest) (*pb.VerifyTokenResponse, error) {
-	return nil, nil
+	user, err := h.service.VerifyToken(ctx, req.AccessToken)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
+	return &pb.VerifyTokenResponse{
+		User: &pb.User{
+			Id:         user.ID.String(),
+			Email:      user.Email,
+			Role:       user.Role,
+			CustomerId: user.CustomerID.String(),
+			CreatedAt:  timestamppb.New(user.CreatedAt.Time),
+		},
+	}, nil
+}
+
+func mapError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, auth.ErrInvalidCredentials) || errors.Is(err, token.ErrInvalidToken) || errors.Is(err, token.ErrExpiredToken) {
+		return status.Errorf(codes.Unauthenticated, "%v", err)
+	}
+	if errors.Is(err, auth.ErrUserAlreadyExists) {
+		return status.Errorf(codes.AlreadyExists, "%v", err)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return status.Errorf(codes.NotFound, "user not found")
+	}
+	return status.Errorf(codes.Internal, "internal server error: %v", err)
 }

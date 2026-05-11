@@ -17,17 +17,18 @@ import (
 
 type mockRegistry struct{}
 
-func (m *mockRegistry) Exists(id uuid.UUID) bool               { return true }
-func (m *mockRegistry) Add(id, customerID uuid.UUID)          {}
-func (m *mockRegistry) GetCustomerID(id uuid.UUID) (uuid.UUID, bool) { return uuid.Nil, true }
-func (m *mockRegistry) Sync(ctx context.Context) (int, error) { return 0, nil }
+func (m *mockRegistry) Exists(id uuid.UUID) bool                              { return true }
+func (m *mockRegistry) Add(id, customerID uuid.UUID)                          {}
+func (m *mockRegistry) GetCustomerID(id uuid.UUID) (uuid.UUID, bool)          { return uuid.Nil, true }
+func (m *mockRegistry) Sync(ctx context.Context) (int, error)                 { return 0, nil }
 func (m *mockRegistry) StartSync(ctx context.Context, interval time.Duration) {}
-func (m *mockRegistry) Wait()                                 {}
+func (m *mockRegistry) Wait()                                                 {}
 
 // mockRedis is a minimal mock for redis.UniversalClient
 type mockRedis struct {
 	redis.UniversalClient
 }
+
 func (m *mockRedis) XAdd(ctx context.Context, a *redis.XAddArgs) *redis.StringCmd {
 	cmd := redis.NewStringCmd(ctx)
 	cmd.SetVal("1-0")

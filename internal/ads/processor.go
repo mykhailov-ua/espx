@@ -57,20 +57,20 @@ func NewStreamConsumer(
 	uniqueConsumerID := fmt.Sprintf("%s-%s-%s", consumerID, hostname, uuid.NewString()[:8])
 
 	return &StreamConsumer{
-		store:        store,
-		rdb:          rdb,
-		streamName:   streamName,
-		groupName:    groupName,
-		consumerID:   uniqueConsumerID,
-		batchSize:      batchSize,
-		flushInt:       flushInt,
-		writeTimeout:   writeTimeout,
-		maxWorkers:     maxWorkers,
-		maxStreamLen:   int64(maxStreamLen),
-		retryInitWait:  retryInitWait,
-		retryMaxWait:   retryMaxWait,
-		maxRetries:     maxRetries,
-		streamMinIdle:  streamMinIdle,
+		store:         store,
+		rdb:           rdb,
+		streamName:    streamName,
+		groupName:     groupName,
+		consumerID:    uniqueConsumerID,
+		batchSize:     batchSize,
+		flushInt:      flushInt,
+		writeTimeout:  writeTimeout,
+		maxWorkers:    maxWorkers,
+		maxStreamLen:  int64(maxStreamLen),
+		retryInitWait: retryInitWait,
+		retryMaxWait:  retryMaxWait,
+		maxRetries:    maxRetries,
+		streamMinIdle: streamMinIdle,
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 	"syscall"
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/delivery/grpc"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/crypto"
+	"github.com/mykhailov-ua/ad-event-processor/internal/auth/delivery/grpc"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/repository"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/token"
