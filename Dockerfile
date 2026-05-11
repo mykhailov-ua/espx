@@ -1,8 +1,7 @@
 # Stage 1: Modules caching
 FROM golang:alpine AS modules
 WORKDIR /src
-COPY go.mod ./
-# COPY go.sum ./ # Not present yet, but good to have in mind
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Stage 2: Build
@@ -10,10 +9,12 @@ FROM golang:alpine AS builder
 COPY --from=modules /go/pkg/mod /go/pkg/mod
 WORKDIR /src
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/app ./cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/tracker ./cmd/server/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/processor ./cmd/processor/main.go
 
 # Stage 3: Final image
 FROM gcr.io/distroless/static-debian12
-COPY --from=builder /bin/app /app
+COPY --from=builder /bin/tracker /tracker
+COPY --from=builder /bin/processor /processor
 USER nonroot:nonroot
-ENTRYPOINT ["/app"]
+ENTRYPOINT ["/tracker"]

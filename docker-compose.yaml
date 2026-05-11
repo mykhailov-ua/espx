@@ -1,10 +1,11 @@
 version: '3.8'
 
 services:
-  app:
+  tracker:
     build:
       context: .
       dockerfile: Dockerfile
+    entrypoint: ["/tracker"]
     env_file:
       - .env
     ports:
@@ -12,6 +13,7 @@ services:
     environment:
       - DB_DSN=${DB_DSN}
       - REDIS_ADDR=${REDIS_ADDR}
+      - DB_TRACKER_MAX_CONNS=4
       - GOMEMLIMIT=450MiB
       - GOGC=200
     deploy:
@@ -44,10 +46,45 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${SERVER_PORT}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  processor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/processor"]
+    env_file:
+      - .env
+    ports:
+      - "${PROCESSOR_PORT}:${PROCESSOR_PORT}"
+    environment:
+      - DB_DSN=${DB_DSN}
+      - REDIS_ADDR=${REDIS_ADDR}
+      - CH_DSN=${CH_DSN}
+      - PROCESSOR_PORT=${PROCESSOR_PORT}
+      - DB_PROCESSOR_MAX_CONNS=16
+      - GOMEMLIMIT=450MiB
+      - GOGC=200
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - database
+      - monitoring
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${SERVER_PORT}/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${PROCESSOR_PORT}/health"]
       interval: 10s
       timeout: 5s
       retries: 3
