@@ -2,6 +2,7 @@ package budget
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,6 +51,74 @@ func (w *SyncWorker) SyncAll(ctx context.Context) {
 	w.syncCustomers(ctx)
 }
 
+const prepareSyncScript = `
+if redis.call("EXISTS", KEYS[3]) == 1 then
+    return "0"
+end
+
+local inflight = redis.call("GET", KEYS[2])
+local current = redis.call("GET", KEYS[1])
+
+local total = 0
+if inflight then total = total + tonumber(inflight) end
+if current then total = total + tonumber(current) end
+
+if total <= 0 then
+    return "0"
+end
+
+if current and tonumber(current) > 0 then
+    redis.call("INCRBYFLOAT", KEYS[1], -tonumber(current))
+    redis.call("INCRBYFLOAT", KEYS[2], tonumber(current))
+end
+
+redis.call("SET", KEYS[3], "1", "EX", ARGV[1])
+return tostring(total)
+`
+
+const commitSyncScript = `
+local remaining = redis.call("INCRBYFLOAT", KEYS[1], -tonumber(ARGV[1]))
+if tonumber(remaining) <= 0.000001 then
+    redis.call("DEL", KEYS[1])
+    redis.call("SREM", KEYS[2], ARGV[2])
+end
+redis.call("DEL", KEYS[3])
+return remaining
+`
+
+func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string, updateFn func(context.Context, uuid.UUID, float64) error) {
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		return
+	}
+
+	syncKey := "budget:sync:" + prefix + ":" + idStr
+	inFlightKey := "budget:inflight:" + prefix + ":" + idStr
+	lockKey := "budget:lock:" + prefix + ":" + idStr
+	dirtySet := "budget:dirty_" + prefix + "s"
+
+	amountStr, err := w.rdb.Eval(ctx, prepareSyncScript, []string{syncKey, inFlightKey, lockKey}, 30).Result()
+	if err != nil || amountStr == "0" {
+		if amountStr == "0" {
+			// Clean up if somehow it's empty but still in dirty set
+			w.rdb.SRem(ctx, dirtySet, idStr)
+		}
+		return
+	}
+
+	amount, _ := strconv.ParseFloat(amountStr.(string), 64)
+	if amount <= 0 {
+		return
+	}
+
+	if err := updateFn(ctx, id, amount); err == nil {
+		w.rdb.Eval(ctx, commitSyncScript, []string{inFlightKey, dirtySet, lockKey}, amount, idStr)
+	} else {
+		// Unlock so it can be retried
+		w.rdb.Del(ctx, lockKey)
+	}
+}
+
 func (w *SyncWorker) syncCampaigns(ctx context.Context) {
 	var cursor uint64
 	for {
@@ -59,24 +128,7 @@ func (w *SyncWorker) syncCampaigns(ctx context.Context) {
 		}
 
 		for _, idStr := range keys {
-			id, err := uuid.Parse(idStr)
-			if err != nil {
-				continue
-			}
-
-			syncKey := "budget:sync:campaign:" + idStr
-			amount, err := w.rdb.Get(ctx, syncKey).Float64()
-			if err == redis.Nil || amount <= 0 {
-				w.rdb.SRem(ctx, "budget:dirty_campaigns", idStr)
-				continue
-			}
-
-			if err := w.campaignRepo.UpdateSpend(ctx, id, amount); err == nil {
-				rem, _ := w.rdb.IncrByFloat(ctx, syncKey, -amount).Result()
-				if rem <= 0 {
-					w.rdb.SRem(ctx, "budget:dirty_campaigns", idStr)
-				}
-			}
+			w.syncEntity(ctx, "campaign", idStr, w.campaignRepo.UpdateSpend)
 		}
 
 		if nextCursor == 0 {
@@ -95,24 +147,7 @@ func (w *SyncWorker) syncCustomers(ctx context.Context) {
 		}
 
 		for _, idStr := range keys {
-			id, err := uuid.Parse(idStr)
-			if err != nil {
-				continue
-			}
-
-			syncKey := "budget:sync:customer:" + idStr
-			amount, err := w.rdb.Get(ctx, syncKey).Float64()
-			if err == redis.Nil || amount <= 0 {
-				w.rdb.SRem(ctx, "budget:dirty_customers", idStr)
-				continue
-			}
-
-			if err := w.customerRepo.UpdateBalance(ctx, id, amount); err == nil {
-				rem, _ := w.rdb.IncrByFloat(ctx, syncKey, -amount).Result()
-				if rem <= 0 {
-					w.rdb.SRem(ctx, "budget:dirty_customers", idStr)
-				}
-			}
+			w.syncEntity(ctx, "customer", idStr, w.customerRepo.UpdateBalance)
 		}
 
 		if nextCursor == 0 {
