@@ -64,6 +64,7 @@ func TestStreamConsumer_CircuitBreakerStopsReads(t *testing.T) {
 		50*time.Millisecond, // retryMaxWait
 		3,                   // maxRetries
 		1*time.Minute,       // streamMinIdle
+		1*time.Second,       // drainTimeout
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -104,5 +105,5 @@ func TestStreamConsumer_CircuitBreakerStopsReads(t *testing.T) {
 	}, 3*time.Second, 10*time.Millisecond, "circuit breaker should recover to closed")
 
 	consumer.Close()
-	consumer.Wait()
+	consumer.Wait(ctx)
 }
