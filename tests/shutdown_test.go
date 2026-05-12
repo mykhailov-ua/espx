@@ -77,7 +77,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 		100000,
 	)
 	filterEngine := ads.NewFilterEngine(unifiedFilter)
-	consumer := ads.NewStreamConsumer(store, rdb, "shutdown-stream", "shutdown-group", "shutdown-c1", cfg.EventBatchSize, cfg.MaxWorkers, 100*time.Millisecond, 5*time.Second, 100*time.Millisecond, 5*time.Second, 5, 5*time.Minute)
+	consumer := ads.NewStreamConsumer(store, rdb, "shutdown-stream", "shutdown-group", "shutdown-c1", cfg.EventBatchSize, cfg.MaxWorkers, 100*time.Millisecond, 5*time.Second, 100*time.Millisecond, 5*time.Second, 5, 5*time.Minute, 1*time.Second)
 	consumer.Start(ctx)
 
 	router := ads_delivery.NewRouter(cfg, registry, filterEngine, pool, []redis.UniversalClient{rdb})
@@ -115,7 +115,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	require.Equal(t, int64(eventCount), acceptedCount)
 
 	consumer.Close()
-	consumer.Wait()
+	consumer.Wait(ctx)
 
 	cancel()
 

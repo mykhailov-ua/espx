@@ -3,6 +3,7 @@ package budget
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ type SyncWorker struct {
 	campaignRepo domain.CampaignRepository
 	customerRepo domain.CustomerRepository
 	interval     time.Duration
+	wg           sync.WaitGroup
 }
 
 func NewSyncWorker(
@@ -32,6 +34,9 @@ func NewSyncWorker(
 }
 
 func (w *SyncWorker) Start(ctx context.Context) {
+	w.wg.Add(1)
+	defer w.wg.Done()
+
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
@@ -43,6 +48,21 @@ func (w *SyncWorker) Start(ctx context.Context) {
 		case <-ticker.C:
 			w.SyncAll(ctx)
 		}
+	}
+}
+
+func (w *SyncWorker) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -97,7 +117,7 @@ func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string
 	lockKey := "budget:lock:" + prefix + ":" + idStr
 	dirtySet := "budget:dirty_" + prefix + "s"
 
-	amountStr, err := w.rdb.Eval(ctx, prepareSyncScript, []string{syncKey, inFlightKey, lockKey}, 30).Result()
+	amountStr, err := w.rdb.Eval(ctx, prepareSyncScript, []string{syncKey, inFlightKey, lockKey}, 60).Result()
 	if err != nil || amountStr == "0" {
 		if amountStr == "0" {
 			// Clean up if somehow it's empty but still in dirty set

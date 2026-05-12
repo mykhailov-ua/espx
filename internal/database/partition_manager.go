@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"sync"
 )
 
 type dbExecutor interface {
@@ -22,6 +23,7 @@ type PartitionManager struct {
 	pool      dbExecutor
 	retention int
 	preCreate int
+	wg        sync.WaitGroup
 }
 
 func NewPartitionManager(pool dbExecutor, retentionDays int, preCreateDays int) *PartitionManager {
@@ -140,7 +142,9 @@ func (pm *PartitionManager) truncateDefault(ctx context.Context) error {
 }
 
 func (pm *PartitionManager) StartBackground(ctx context.Context) {
+	pm.wg.Add(1)
 	go func() {
+		defer pm.wg.Done()
 		if err := pm.Run(ctx); err != nil {
 			slog.Error("initial partition maintenance failed", "error", err)
 		}
@@ -159,4 +163,19 @@ func (pm *PartitionManager) StartBackground(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (pm *PartitionManager) Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		pm.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
