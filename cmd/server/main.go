@@ -12,6 +12,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	ads_delivery "github.com/mykhailov-ua/ad-event-processor/internal/ads/delivery"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/sharding"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	infra_repo "github.com/mykhailov-ua/ad-event-processor/internal/infra/repository"
@@ -73,9 +74,11 @@ func main() {
 	}
 
 	campaignRepo := infra_repo.NewCampaignRepo(queries)
+	sharder := sharding.NewJumpHashSharder(len(rdbs))
 
 	unifiedFilter := ads.NewUnifiedFilter(
 		rdbs,
+		sharder,
 		registry,
 		campaignRepo,
 		cfg.RateLimitPerMin,
@@ -118,7 +121,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Duration(cfg.Lifecycle.ShutdownTimeoutMs)*time.Millisecond)
 	defer shutdownCancel()
 
-	cancel() // Triggers the shutdown of background synchronization tasks and cancels the global context.
+	cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		slog.Error("server shutdown failed", "error", err)
@@ -128,7 +131,6 @@ func main() {
 		slog.Error("registry wait failed", "error", err)
 	}
 
-	// Sequentially terminates connections to all Redis shards to ensure clean resource release and prevent socket leakage.
 	for i, rdb := range rdbs {
 		if err := rdb.Close(); err != nil {
 			slog.Error("failed to close redis shard", "shard", i, "error", err)

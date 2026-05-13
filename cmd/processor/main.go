@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"fmt"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
@@ -17,7 +18,6 @@ import (
 	infra_repo "github.com/mykhailov-ua/ad-event-processor/internal/infra/repository"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
-	"fmt"
 )
 
 func main() {
@@ -89,7 +89,7 @@ func main() {
 
 	for i, rdb := range rdbs {
 		shardID := fmt.Sprintf("shard_%d", i)
-		
+
 		sw := budget.NewSyncWorker(rdb, campaignRepo, customerRepo, time.Duration(cfg.BudgetSyncIntervalMs)*time.Millisecond)
 		syncWorkers = append(syncWorkers, sw)
 		go sw.Start(ctx)

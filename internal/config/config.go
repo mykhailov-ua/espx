@@ -102,7 +102,7 @@ func Load() (*Config, error) {
 		ServerPort:              os.Getenv("SERVER_PORT"),
 		ProcessorPort:           os.Getenv("PROCESSOR_PORT"),
 		DBDSN:                   Secret(os.Getenv("DB_DSN")),
-		RedisAddrs:             strings.Split(os.Getenv("REDIS_ADDRS"), ","),
+		RedisAddrs:              strings.Split(os.Getenv("REDIS_ADDRS"), ","),
 		RedisPassword:           Secret(os.Getenv("REDIS_PASSWORD")),
 		RedisStreamName:         os.Getenv("REDIS_STREAM_NAME"),
 		RedisGroupName:          os.Getenv("REDIS_GROUP_NAME"),

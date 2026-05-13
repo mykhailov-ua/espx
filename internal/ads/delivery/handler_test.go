@@ -21,7 +21,7 @@ func (m *mockRegistry) Add(id, customerID uuid.UUID)                          {}
 func (m *mockRegistry) GetCustomerID(id uuid.UUID) (uuid.UUID, bool)          { return uuid.Nil, true }
 func (m *mockRegistry) Sync(ctx context.Context) (int, error)                 { return 0, nil }
 func (m *mockRegistry) StartSync(ctx context.Context, interval time.Duration) {}
-func (m *mockRegistry) Wait(ctx context.Context) error                          { return nil }
+func (m *mockRegistry) Wait(ctx context.Context) error                        { return nil }
 
 func BenchmarkTrackHandlerJSON(b *testing.B) {
 	cfg := &config.Config{

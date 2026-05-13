@@ -273,7 +273,6 @@ func (s *Service) RefreshToken(ctx context.Context, refreshTokenStr string, dura
 			return err
 		}
 
-		// Issue new refresh token
 		newRefreshTokenId, _ := uuid.NewV7()
 		newRefreshTokenStr = uuid.NewString()
 		expiresAt := time.Now().Add(7 * 24 * time.Hour)
@@ -298,7 +297,6 @@ func (s *Service) RefreshToken(ctx context.Context, refreshTokenStr string, dura
 		return "", "", err
 	}
 
-	// Cache result for idempotency (e.g. for 5 minutes)
 	if s.rdb != nil {
 		s.rdb.Set(ctx, "idempotency:refresh:"+refreshTokenStr, accessToken+" "+newRefreshTokenStr, 5*time.Minute)
 	}

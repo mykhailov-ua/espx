@@ -1,8 +1,8 @@
 package delivery
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -76,7 +76,6 @@ func putTrackResponse(resp *pb.TrackResponse) {
 	resp.Reset()
 	trackResponsePool.Put(resp)
 }
-
 
 // Pinger defines the interface for checking component connectivity.
 type Pinger interface {
@@ -179,7 +178,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 				if pbReq.Metadata.ClickId != "" {
 					clickID = pbReq.Metadata.ClickId
 				}
-				
+
 				mBuf := bufferPool.Get().(*bytes.Buffer)
 				defer putBuffer(mBuf)
 			}
@@ -293,7 +292,7 @@ func extractClientIP(r *http.Request) string {
 				for end > start && xff[end-1] == ' ' {
 					end--
 				}
-				
+
 				if start < end {
 					ipStr := xff[start:end]
 					parsedIP := net.ParseIP(ipStr)

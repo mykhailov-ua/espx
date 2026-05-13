@@ -11,13 +11,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/redis/go-redis/v9"
 	ads_delivery "github.com/mykhailov-ua/ad-event-processor/internal/ads/delivery"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/sharding"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	infra_repo "github.com/mykhailov-ua/ad-event-processor/internal/infra/repository"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,6 +69,7 @@ func TestE2EFlow(t *testing.T) {
 	campaignRepo := infra_repo.NewCampaignRepo(queries)
 	unifiedFilter := ads.NewUnifiedFilter(
 		[]redis.UniversalClient{rdb},
+		sharding.NewJumpHashSharder(1),
 		registry,
 		campaignRepo,
 		1000,
@@ -151,6 +153,7 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 	campaignRepo := infra_repo.NewCampaignRepo(queries)
 	unifiedFilter := ads.NewUnifiedFilter(
 		[]redis.UniversalClient{rdb},
+		sharding.NewJumpHashSharder(1),
 		registry,
 		campaignRepo,
 		1000,
