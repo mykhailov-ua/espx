@@ -3,11 +3,12 @@ package ads
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/sharding"
+
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
 )
@@ -19,7 +20,7 @@ var unifiedFilterLua string
 // It integrates rate limiting, deduplication, and budget tracking in a single atomic operation.
 type UnifiedFilter struct {
 	rdbs             []redis.UniversalClient
-	sharder          sharding.Sharder
+	sharder          Sharder
 	script           *redis.Script
 	registry         domain.CampaignRegistry
 	repo             domain.CampaignRepository
@@ -37,7 +38,7 @@ type UnifiedFilter struct {
 // Chosen to centralize validation logic and ensure atomic state transitions across shards.
 func NewUnifiedFilter(
 	rdbs []redis.UniversalClient,
-	sharder sharding.Sharder,
+	sharder Sharder,
 	registry domain.CampaignRegistry,
 	repo domain.CampaignRepository,
 	rateLimit int,
@@ -167,17 +168,17 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 		).Int64()
 
 		if err != nil {
-			return nil
+			return err
 		}
 
 		if res == -1 {
 			if i > 0 {
-				return nil
+				return fmt.Errorf("budget cache miss on retry: %w", ErrBudgetExhausted)
 			}
 
 			camp, err := f.repo.GetByID(ctx, evt.CampaignID)
 			if err != nil {
-				return nil
+				return fmt.Errorf("failed to load campaign from db: %w", err)
 			}
 
 			remaining := camp.BudgetLimit - camp.CurrentSpend

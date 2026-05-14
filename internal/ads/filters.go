@@ -137,7 +137,7 @@ func (l *IPRateLimiter) Check(ctx context.Context, evt *domain.Event) error {
 
 	res, err := l.rdb.Eval(ctx, rateLimitScript, []string{key}, windowMs, l.limit).Result()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	if res.(int64) == 1 {
@@ -180,7 +180,7 @@ func (f *DuplicateEventFilter) Check(ctx context.Context, evt *domain.Event) err
 
 	ok, err := f.rdb.SetNX(ctx, key, "1", f.ttl).Result()
 	if err != nil {
-		return nil
+		return err
 	}
 
 	if !ok {

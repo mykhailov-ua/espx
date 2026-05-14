@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -190,22 +191,6 @@ func (p *StreamConsumer) worker(ctx context.Context, workerIdx int) {
 				p.tryFlush(ctx, &batch, &msgIDs, &retryCount, workerID, ticker, &retryWait)
 			}
 		default:
-			if !p.cb.Allow() {
-				wait := p.cb.WaitDuration()
-				if wait > 0 {
-					slog.Warn("circuit breaker open, pausing reads",
-						"group", p.groupName,
-						"worker", workerID,
-						"wait", wait,
-					)
-					select {
-					case <-ctx.Done():
-						continue
-					case <-time.After(wait):
-					}
-				}
-				continue
-			}
 
 			readCount := int64(p.batchSize - len(batch))
 			if readCount <= 0 {
@@ -245,10 +230,19 @@ func (p *StreamConsumer) worker(ctx context.Context, workerIdx int) {
 
 // tryFlush attempts to persist a batch of events and updates the circuit breaker state.
 func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, msgIDs *[]string, retryCount *int, workerID string, ticker *time.Ticker, retryWait *time.Duration) {
+	if !p.cb.Allow() {
+		wait := p.cb.WaitDuration()
+		if wait > 0 {
+			time.Sleep(wait)
+		} else {
+			time.Sleep(100 * time.Millisecond) // Minimum backoff when open
+		}
+		return
+	}
 	err := p.flushBatch(ctx, *batch, *msgIDs)
 	if err == nil {
 		p.cb.RecordSuccess()
-		CircuitBreakerState.WithLabelValues(p.groupName).Set(float64(p.cb.State()))
+		metrics.CircuitBreakerState.WithLabelValues(p.groupName).Set(float64(p.cb.State()))
 		for _, e := range *batch {
 			domain.EventPool.Put(e)
 		}
@@ -264,7 +258,7 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 
 	*retryCount++
 	p.cb.RecordFailure()
-	CircuitBreakerState.WithLabelValues(p.groupName).Set(float64(p.cb.State()))
+	metrics.CircuitBreakerState.WithLabelValues(p.groupName).Set(float64(p.cb.State()))
 
 	if *retryCount > p.maxRetries {
 		slog.Error("poison pill detected, moving to DLQ", "error", err, "group", p.groupName, "worker", workerID)
@@ -546,7 +540,7 @@ func (p *StreamConsumer) dlqMonitor(ctx context.Context) {
 				}
 				continue
 			}
-			DlqSize.Set(float64(size))
+			metrics.DlqSize.Set(float64(size))
 		}
 	}
 }
