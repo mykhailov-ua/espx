@@ -1,9 +1,10 @@
-package tests
+package database
 
 import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
+func SetupTestDB(t testing.TB) (*pgxpool.Pool, func()) {
 	ctx := context.Background()
 
 	pgContainer, err := postgres.Run(ctx,
@@ -27,7 +28,7 @@ func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
-				WithStartupTimeout(10*time.Second)),
+				WithStartupTimeout(15*time.Second)),
 	)
 	if err != nil {
 		t.Fatalf("failed to start container: %s", err)
@@ -43,10 +44,13 @@ func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 		t.Fatalf("failed to connect to db: %s", err)
 	}
 
-	migrationsDir := filepath.Join("..", "internal/ads", "migrations")
+	_, filename, _, _ := runtime.Caller(0)
+	baseDir := filepath.Join(filepath.Dir(filename), "..", "..")
+	migrationsDir := filepath.Join(baseDir, "internal/ads/migrations")
+
 	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
-		t.Fatalf("failed to read migrations dir: %s", err)
+		t.Fatalf("failed to read migrations dir %s: %s", migrationsDir, err)
 	}
 
 	for _, entry := range entries {
@@ -76,7 +80,7 @@ func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 	}
 }
 
-func setupTestRedis(t *testing.T) (redis.UniversalClient, func()) {
+func SetupTestRedis(t testing.TB) (redis.UniversalClient, func()) {
 	ctx := context.Background()
 
 	redisContainer, err := rediscontainer.Run(ctx, "redis:7-alpine")

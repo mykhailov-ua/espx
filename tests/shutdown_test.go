@@ -13,12 +13,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	ads_delivery "github.com/mykhailov-ua/ad-event-processor/internal/ads/delivery"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/sharding"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
-	infra_repo "github.com/mykhailov-ua/ad-event-processor/internal/infra/repository"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +35,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	queries := repository.New(pool)
+	queries := db.New(pool)
 	cfg := &config.Config{
 		EventBatchSize:     10,
 		EventFlushMs:       100,
@@ -63,12 +60,11 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	_, _ = registry.Sync(ctx)
 
 	store := ads.NewPostgresStore(queries, 5*time.Second)
-	campaignRepo := infra_repo.NewCampaignRepo(queries)
 	unifiedFilter := ads.NewUnifiedFilter(
 		[]redis.UniversalClient{rdb},
-		sharding.NewJumpHashSharder(1),
+		ads.NewJumpHashSharder(1),
 		registry,
-		campaignRepo,
+		ads.NewCampaignRepo(queries),
 		1000,
 		time.Minute,
 		45*time.Second,
@@ -82,7 +78,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	consumer := ads.NewStreamConsumer(store, rdb, "shutdown-stream", "shutdown-group", "shutdown-c1", cfg.EventBatchSize, cfg.MaxWorkers, 100*time.Millisecond, 5*time.Second, 100*time.Millisecond, 5*time.Second, 5, 5*time.Minute, 1*time.Second)
 	consumer.Start(ctx)
 
-	router := ads_delivery.NewRouter(cfg, registry, filterEngine, pool, []redis.UniversalClient{rdb})
+	router := ads.NewRouter(cfg, registry, filterEngine, pool, []redis.UniversalClient{rdb})
 	srv := httptest.NewServer(router)
 	defer srv.Close()
 

@@ -7,10 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/repository"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/infra/budget"
-	infra_repo "github.com/mykhailov-ua/ad-event-processor/internal/infra/repository"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,13 +26,13 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	rdb, cleanupRedis := setupTestRedis(t)
 	defer cleanupRedis()
 
-	queries := repository.New(dbPool)
-	campaignRepo := infra_repo.NewCampaignRepo(queries)
-	customerRepo := infra_repo.NewCustomerRepo(queries)
+	queries := db.New(dbPool)
+	campaignRepo := ads.NewCampaignRepo(queries)
+	customerRepo := ads.NewCustomerRepo(queries)
 	registry := ads.NewRegistry(queries)
 
-	budgetManager := budget.NewRedisBudgetManager(rdb, campaignRepo, 10*time.Second)
-	syncWorker := budget.NewSyncWorker(rdb, campaignRepo, customerRepo, 100*time.Millisecond)
+	budgetManager := ads.NewRedisBudgetManager(rdb, campaignRepo, 10*time.Second)
+	syncWorker := ads.NewSyncWorker(rdb, campaignRepo, customerRepo, 100*time.Millisecond)
 
 	customerID := uuid.New()
 	campaignID := uuid.New()
