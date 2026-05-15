@@ -3,12 +3,20 @@ package ads
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 )
+
+var slicePool = sync.Pool{
+	New: func() any {
+		s := make([]*domain.Event, 0, 1000)
+		return &s
+	},
+}
 
 type ClickHouseStore struct {
 	conn         driver.Conn
@@ -59,12 +67,34 @@ func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []*domain.Event
 func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*domain.Event) error {
 	start := time.Now()
 
-	imps := make([]*domain.Event, 0, len(events))
-	clicks := make([]*domain.Event, 0, len(events))
-	convs := make([]*domain.Event, 0, len(events))
+	pImps := slicePool.Get().(*[]*domain.Event)
+	pClicks := slicePool.Get().(*[]*domain.Event)
+	pConvs := slicePool.Get().(*[]*domain.Event)
+	pFraud := slicePool.Get().(*[]*domain.Event)
+
+	defer func() {
+		*pImps = (*pImps)[:0]
+		*pClicks = (*pClicks)[:0]
+		*pConvs = (*pConvs)[:0]
+		*pFraud = (*pFraud)[:0]
+		slicePool.Put(pImps)
+		slicePool.Put(pClicks)
+		slicePool.Put(pConvs)
+		slicePool.Put(pFraud)
+	}()
+
+	imps := *pImps
+	clicks := *pClicks
+	convs := *pConvs
+	fraud := *pFraud
 
 	for i := range events {
 		e := events[i]
+		if e.FraudReason != "" {
+			fraud = append(fraud, e)
+			continue
+		}
+
 		switch e.Type {
 		case "impression":
 			imps = append(imps, e)
@@ -74,8 +104,11 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 			convs = append(convs, e)
 		}
 	}
+	
+	// Update pointers back since append might have reallocated
+	*pImps, *pClicks, *pConvs, *pFraud = imps, clicks, convs, fraud
 
-	insert := func(table string, evts []*domain.Event) error {
+	insert := func(table string, evts []*domain.Event, isFraud bool) error {
 		if len(evts) == 0 {
 			return nil
 		}
@@ -86,14 +119,28 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 		}
 
 		for _, e := range evts {
-			err := batch.Append(
-				e.ClickID,
-				e.CampaignID,
-				e.IP,
-				e.UA,
-				string(e.Payload),
-				e.CreatedAt,
-			)
+			if isFraud {
+				err = batch.Append(
+					e.ClickID,
+					e.CampaignID,
+					e.UserID,
+					e.Type,
+					e.IP,
+					e.UA,
+					string(e.Payload),
+					e.FraudReason,
+					e.CreatedAt,
+				)
+			} else {
+				err = batch.Append(
+					e.ClickID,
+					e.CampaignID,
+					e.IP,
+					e.UA,
+					string(e.Payload),
+					e.CreatedAt,
+				)
+			}
 			if err != nil {
 				return fmt.Errorf("append %s: %w", table, err)
 			}
@@ -105,13 +152,16 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 		return nil
 	}
 
-	if err := insert("impressions", imps); err != nil {
+	if err := insert("impressions", imps, false); err != nil {
 		return err
 	}
-	if err := insert("clicks", clicks); err != nil {
+	if err := insert("clicks", clicks, false); err != nil {
 		return err
 	}
-	if err := insert("conversions", convs); err != nil {
+	if err := insert("conversions", convs, false); err != nil {
+		return err
+	}
+	if err := insert("fraud_events", fraud, true); err != nil {
 		return err
 	}
 
