@@ -11,16 +11,19 @@ import (
 type Event struct {
 	ClickID    string
 	CampaignID uuid.UUID
+	UserID     string
 	Type       string
 	Payload    []byte
 	IP         string
-	UA         string
-	CreatedAt  time.Time
+	UA          string
+	FraudReason string
+	CreatedAt   time.Time
 }
 
 func (e *Event) Reset() {
 	e.ClickID = ""
 	e.CampaignID = uuid.Nil
+	e.UserID = ""
 	e.Type = ""
 	if cap(e.Payload) > 4096 {
 		e.Payload = make([]byte, 0, 1024)
@@ -29,6 +32,7 @@ func (e *Event) Reset() {
 	}
 	e.IP = ""
 	e.UA = ""
+	e.FraudReason = ""
 	e.CreatedAt = time.Time{}
 }
 
