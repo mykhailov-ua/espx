@@ -29,6 +29,7 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []*domain.Event) 
 
 	clickIDs := make([]string, len(events))
 	campaignIDs := make([]pgtype.UUID, len(events))
+	userIDs := make([]string, len(events))
 	eventTypes := make([]string, len(events))
 	payloads := make([][]byte, len(events))
 	ipAddresses := make([]string, len(events))
@@ -41,6 +42,7 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []*domain.Event) 
 	for i, evt := range events {
 		clickIDs[i] = evt.ClickID
 		campaignIDs[i] = pgtype.UUID{Bytes: evt.CampaignID, Valid: true}
+		userIDs[i] = evt.UserID
 		eventTypes[i] = evt.Type
 		if len(evt.Payload) == 0 {
 			payloads[i] = defaultPayload
@@ -69,6 +71,7 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []*domain.Event) 
 		err = s.queries.InsertEventsBatch(dbCtx, db.InsertEventsBatchParams{
 			ClickIds:     clickIDs,
 			CampaignIds:  campaignIDs,
+			UserIds:      userIDs,
 			EventTypes:   eventTypes,
 			Payloads:     payloads,
 			IpAddresses:  ipAddresses,

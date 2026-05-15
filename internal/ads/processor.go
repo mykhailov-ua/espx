@@ -365,6 +365,9 @@ func (p *StreamConsumer) parseMessage(id string, values map[string]interface{}) 
 	if v, ok := values["campaign_id"].(string); ok {
 		evt.CampaignID, _ = uuid.Parse(v)
 	}
+	if v, ok := values["user_id"].(string); ok {
+		evt.UserID = v
+	}
 	if v, ok := values["type"].(string); ok {
 		evt.Type = v
 	}
@@ -376,6 +379,9 @@ func (p *StreamConsumer) parseMessage(id string, values map[string]interface{}) 
 	}
 	if v, ok := values["ua"].(string); ok {
 		evt.UA = v
+	}
+	if v, ok := values["fraud_reason"].(string); ok {
+		evt.FraudReason = v
 	}
 
 	if idx := strings.IndexByte(id, '-'); idx > 0 {

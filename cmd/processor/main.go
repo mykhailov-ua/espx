@@ -129,6 +129,25 @@ func main() {
 		)
 		chConsumers = append(chConsumers, cc)
 		cc.Start(ctx)
+
+		fc := ads.NewStreamConsumer(
+			chStore,
+			rdb,
+			cfg.FraudStreamName,
+			cfg.RedisGroupName+"_fraud",
+			cfg.RedisConsumerID+"_fraud_"+shardID,
+			cfg.CHBatchSize,
+			cfg.CHMaxWorkers,
+			time.Duration(cfg.CHFlushIntervalMs)*time.Millisecond,
+			time.Duration(cfg.WriteTimeoutMs)*time.Millisecond,
+			time.Duration(cfg.RetryInitialWaitMs)*time.Millisecond,
+			time.Duration(cfg.RetryMaxWaitMs)*time.Millisecond,
+			cfg.MaxRetries,
+			time.Duration(cfg.StreamMinIdleMs)*time.Millisecond,
+			time.Duration(cfg.Lifecycle.DrainTimeoutMs)*time.Millisecond,
+		)
+		chConsumers = append(chConsumers, fc)
+		fc.Start(ctx)
 	}
 
 	slog.Info("starting ad-event-processor worker",
