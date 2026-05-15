@@ -3,6 +3,8 @@ package ads
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +24,102 @@ var (
 	ErrDuplicateEvent    = errors.New("duplicate event detected")
 	ErrBudgetExhausted   = errors.New("budget exhausted")
 	ErrCampaignNotFound  = errors.New("campaign not found in registry")
+	ErrPacingExhausted   = errors.New("pacing exhausted")
+	ErrFreqLimitExceeded = errors.New("frequency limit exceeded")
+	ErrGeoBlocked        = errors.New("geo-targeting blocked")
+	ErrFraudDetected     = errors.New("fraud detected")
 )
+
+// FraudFilter implements multi-layered bot detection including DC filtering and TTC analysis.
+// Chosen to operate as an early-exit filter to prevent fraudulent spend and ingestion.
+type FraudFilter struct {
+	geo    GeoProvider
+	rdb    redis.UniversalClient
+	ttcMin time.Duration
+}
+
+func NewFraudFilter(geo GeoProvider, rdb redis.UniversalClient, ttcMin time.Duration) *FraudFilter {
+	return &FraudFilter{
+		geo:    geo,
+		rdb:    rdb,
+		ttcMin: ttcMin,
+	}
+}
+
+func (f *FraudFilter) Check(ctx context.Context, evt *domain.Event) error {
+	// 1. Data Center / Proxy Check (Stateless-ish)
+	isAnon, err := f.geo.IsAnonymous(evt.IP)
+	if err == nil && isAnon {
+		evt.FraudReason = "datacenter_ip"
+		return ErrFraudDetected
+	}
+
+	// 2. Time-to-Click (TTC) Analysis (Stateful)
+	if evt.Type == "impression" {
+		// Store impression timestamp for future click verification
+		key := fmt.Sprintf("imp_ts:%s:%s", evt.UserID, evt.CampaignID)
+		f.rdb.Set(ctx, key, time.Now().UnixMilli(), 10*time.Minute)
+		return nil
+	}
+
+	if evt.Type == "click" {
+		key := fmt.Sprintf("imp_ts:%s:%s", evt.UserID, evt.CampaignID)
+		ts, err := f.rdb.Get(ctx, key).Int64()
+		if err == nil {
+			delta := time.Since(time.UnixMilli(ts))
+			if delta < f.ttcMin {
+				evt.FraudReason = fmt.Sprintf("fast_click:%v", delta)
+				return ErrFraudDetected
+			}
+		}
+		// Note: we allow clicks without an impression record (some environments lose impressions)
+		// but log it if it's too frequent (future work).
+	}
+
+	return nil
+}
+
+// GeoFilter enforces regional targeting by matching client IP against campaign allowed countries.
+// Chosen to operate as an early-exit stateless filter to minimize stateful Redis operations.
+type GeoFilter struct {
+	geo      GeoProvider
+	registry domain.CampaignRegistry
+}
+
+func NewGeoFilter(geo GeoProvider, registry domain.CampaignRegistry) *GeoFilter {
+	return &GeoFilter{
+		geo:      geo,
+		registry: registry,
+	}
+}
+
+func (f *GeoFilter) Check(ctx context.Context, evt *domain.Event) error {
+	camp, ok := f.registry.GetCampaign(evt.CampaignID)
+	if !ok {
+		return ErrCampaignNotFound
+	}
+
+	// Skip if no targeting configured
+	if len(camp.TargetCountries) == 0 {
+		return nil
+	}
+
+	country, err := f.geo.GetCountry(evt.IP)
+	if err != nil {
+		slog.Warn("geo lookup failed", "ip", evt.IP, "error", err)
+		// We allow on lookup failure by default, or could block. 
+		// For high RPS, we might want to allow to prevent complete ingestion halt.
+		return nil 
+	}
+
+	for _, allowed := range camp.TargetCountries {
+		if allowed == country {
+			return nil
+		}
+	}
+
+	return ErrGeoBlocked
+}
 
 // BudgetFilter validates event costs against available campaign and customer balances.
 // Chosen to prevent overspend before high-latency database synchronization occurs.

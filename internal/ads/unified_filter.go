@@ -13,6 +13,8 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
+// Errors are imported from filters.go
+
 //go:embed unified_filter.lua
 var unifiedFilterLua string
 
@@ -80,7 +82,7 @@ func (f *UnifiedFilter) getRDB(campaignID uuid.UUID) redis.UniversalClient {
 // Check executes the validation script and handles budget cache misses via PostgreSQL.
 // Implements an iterative retry loop to prevent recursion while ensuring ingestion availability.
 func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
-	customerID, ok := f.registry.GetCustomerID(evt.CampaignID)
+	campInfo, ok := f.registry.GetCampaign(evt.CampaignID)
 	if !ok {
 		return ErrCampaignNotFound
 	}
@@ -91,7 +93,7 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	}
 
 	campaignIDStr := evt.CampaignID.String()
-	customerIDStr := customerID.String()
+	customerIDStr := campInfo.CustomerID.String()
 
 	amount := f.clickAmount
 	if evt.Type == "impression" {
@@ -139,6 +141,36 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	dirtyCustomersKey := "budget:dirty_customers"
 	streamKey := f.streamName
 
+	// Pacing related calculations
+	now := time.Now().In(campInfo.Location)
+	currentDate := now.Format("20060102")
+	currentHour := now.Hour() + 1 // 1-24
+
+	sb.Reset()
+	sb.WriteString("budget:daily_spent:campaign:")
+	sb.WriteString(campaignIDStr)
+	sb.WriteByte(':')
+	sb.WriteString(currentDate)
+	dailySpendKey := sb.String()
+
+	// Frequency capping key
+	var fcapKey string
+	if evt.UserID != "" {
+		sb.Reset()
+		sb.WriteString("fcap:c:")
+		sb.WriteString(campaignIDStr)
+		sb.WriteString(":u:")
+		sb.WriteString(evt.UserID)
+		fcapKey = sb.String()
+	} else {
+		fcapKey = "fcap:ignored" // Dummy key if user_id is missing
+	}
+
+	isEven := 0
+	if campInfo.PacingMode == domain.PacingModeEven {
+		isEven = 1
+	}
+
 	for i := 0; i < 2; i++ {
 		res, err := f.script.Run(ctx, rdb,
 			[]string{
@@ -151,6 +183,8 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 				dirtyCampaignsKey,
 				dirtyCustomersKey,
 				streamKey,
+				dailySpendKey,
+				fcapKey,
 			},
 			int(f.rateLimitWindow.Seconds()),
 			f.rateLimit,
@@ -165,6 +199,12 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 			evt.Payload,
 			evt.IP,
 			evt.UA,
+			isEven,
+			campInfo.DailyBudget,
+			currentHour,
+			evt.UserID,
+			campInfo.FreqLimit,
+			campInfo.FreqWindow,
 		).Int64()
 
 		if err != nil {
@@ -197,6 +237,10 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 			return ErrDuplicateEvent
 		case 3:
 			return ErrBudgetExhausted
+		case 4:
+			return ErrPacingExhausted
+		case 5:
+			return ErrFreqLimitExceeded
 		default:
 			return nil
 		}
