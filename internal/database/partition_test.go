@@ -29,6 +29,25 @@ func (m *MockDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, 
 	return callArgs.Get(0).(pgx.Rows), callArgs.Error(1)
 }
 
+func (m *MockDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	callArgs := m.Called(ctx, sql, args)
+	return callArgs.Get(0).(pgx.Row)
+}
+
+type MockRow struct {
+	mock.Mock
+	pgx.Row
+	val any
+}
+
+func (m *MockRow) Scan(dest ...any) error {
+	if m.val == nil {
+		return pgx.ErrNoRows
+	}
+	*dest[0].(*int64) = m.val.(int64)
+	return nil
+}
+
 type MockRows struct {
 	mock.Mock
 	pgx.Rows
@@ -103,6 +122,10 @@ func TestPartitionManager_Cleanup(t *testing.T) {
 			mockDB.On("Exec", mock.Anything, mock.MatchedBy(func(s string) bool {
 				return true
 			}), mock.Anything).Return(pgconn.CommandTag{}, nil)
+
+			mockDB.On("QueryRow", mock.Anything, mock.MatchedBy(func(s string) bool {
+				return true
+			}), mock.Anything).Return(&MockRow{val: int64(0)})
 
 			err := pm.Run(context.Background())
 			assert.NoError(t, err)

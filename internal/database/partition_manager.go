@@ -14,6 +14,7 @@ import (
 type dbExecutor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // PartitionManager automates the creation of future partitions and the cleanup
@@ -130,14 +131,26 @@ func (pm *PartitionManager) dropPartitions(ctx context.Context, now time.Time, o
 }
 
 // truncateDefault clears the default partition that catches events not matching
-// any date-based partition. Without periodic cleanup, this table grows unbounded
-// and degrades query performance via sequential scans.
+// any date-based partition. It logs a critical error if data is found, as this
+// indicates a failure in the partition creation logic or severe clock drift.
 func (pm *PartitionManager) truncateDefault(ctx context.Context) error {
-	_, err := pm.pool.Exec(ctx, "TRUNCATE TABLE events_default")
+	var count int64
+	err := pm.pool.QueryRow(ctx, "SELECT count(*) FROM events_default").Scan(&count)
 	if err != nil {
 		return err
 	}
-	slog.Info("truncated events_default partition")
+
+	if count > 0 {
+		slog.Error("CRITICAL: events_default partition contains data! Missing future partitions or clock drift detected", "count", count)
+	}
+
+	_, err = pm.pool.Exec(ctx, "TRUNCATE TABLE events_default")
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		slog.Info("truncated events_default partition to prevent disk exhaustion", "count", count)
+	}
 	return nil
 }
 
