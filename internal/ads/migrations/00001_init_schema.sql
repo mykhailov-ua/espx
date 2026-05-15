@@ -9,8 +9,8 @@ CREATE TABLE campaigns (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Partitioned table for high-volume tracking events.
--- We use RANGE partitioning by created_at for efficient data retention.
+-- Partitioned table for tracking events.
+-- RANGE partitioning by created_at.
 CREATE TABLE events (
     click_id TEXT NOT NULL,
     campaign_id UUID NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE campaign_stats (
     PRIMARY KEY (campaign_id, date)
 );
 
--- Performance indexes
+-- Indexes
 CREATE INDEX idx_events_campaign_id ON events(campaign_id);
 CREATE INDEX idx_campaigns_status_active ON campaigns(status) WHERE status = 'active';
 -- +goose StatementEnd

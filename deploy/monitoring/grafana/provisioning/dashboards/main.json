@@ -204,8 +204,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "AdPulse Ingestion Performance",
-  "uid": "adpulse-perf",
+  "title": "Ingestion Performance",
+  "uid": "perf-overview",
   "version": 1,
   "weekStart": ""
 }

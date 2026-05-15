@@ -175,7 +175,7 @@
   "time": { "from": "now-15m", "to": "now" },
   "timepicker": {},
   "timezone": "",
-  "title": "AdPulse Performance Overview",
+  "title": "ad-event-processor Performance Overview",
   "uid": "adpulse_main",
   "version": 1,
   "weekStart": ""

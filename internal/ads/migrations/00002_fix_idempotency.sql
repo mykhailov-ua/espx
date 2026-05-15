@@ -1,9 +1,8 @@
 -- +goose Up
 -- +goose StatementBegin
 
--- Recreate events table with DATE-based partitioning for correct deduplication.
--- PK (click_id, created_date) ensures same click_id cannot appear twice on the same day,
--- regardless of the exact timestamp.
+-- Recreate events table with DATE-based partitioning.
+-- PK (click_id, created_date) for deduplication.
 -- created_date is a regular column (not GENERATED) because Postgres does not allow
 -- generated columns in partition keys. The application layer sets it to created_at::date.
 DROP TABLE IF EXISTS events_default;

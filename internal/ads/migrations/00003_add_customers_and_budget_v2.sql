@@ -37,7 +37,7 @@ ALTER TABLE campaigns ALTER COLUMN status TYPE campaign_status_type
 
 ALTER TABLE campaigns ALTER COLUMN status SET DEFAULT 'ACTIVE';
 
--- Indices for performance
+-- Indices
 CREATE INDEX idx_campaigns_customer_id ON campaigns(customer_id);
 CREATE INDEX idx_campaigns_status_active ON campaigns(status) WHERE status = 'ACTIVE'::campaign_status_type;
 

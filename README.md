@@ -1,60 +1,63 @@
-# AdPulse Event Processor
+# ad-event-processor
 
-High-throughput ad event ingestion and processing pipeline. Optimized for low-latency state validation and high-frequency data persistence.
+Ad event ingestion and processing pipeline.
 
-## System Architecture
+## Core Features
 
-### Ingestion Layer (Tracker)
-- **Horizontal Scaling**: 4 independent replicas behind Nginx load balancer.
-- **Protobuf Ingestion**: Binary ingestion via `application/x-protobuf` to minimize CPU cycles spent on deserialization and heap allocation.
-- **Stateless Execution**: Trackers do not maintain local state; all validation is offloaded to the sharded cache layer.
-- **Host Networking**: Services operate in `network_mode: host` to eliminate Docker network bridge overhead (docker-proxy/NAT).
+- **Ingestion**: HTTP/Protobuf tracker with object pooling.
+- **Validation**: Sharded Redis with atomic Lua filters (Budget, Pacing, Frequency).
+- **Anti-Fraud**: 
+  - DC/VPN/Proxy detection (MaxMind).
+  - TTC (Time-to-Click) velocity checks.
+  - Geo-targeting validation.
+- **Persistence**: Async processing into PostgreSQL (Transactional) and ClickHouse (Analytical).
+- **Management**: Background workers for Nginx IP blacklisting and DB partition rotation.
 
-### State & Cache Layer (Sharded Redis)
-- **Horizontal Sharding**: 6 independent Redis instances using consistent hashing by `CampaignID`.
-- **Atomic Operations**: Business logic (budget validation, frequency capping, deduplication) is executed via Lua scripts to ensure atomicity and reduce round-trips.
-- **Deduplication**: Bloom-filter-like behavior with short-term (45s) TTL for ClickIDs to prevent ingestion bursts from double-charging.
+## Architecture
 
-### Persistence Layer (Async Processor)
-- **Stream Processing**: Decoupled consumer group reading from Redis Streams.
-- **Dual Store**: 
-  - **PostgreSQL**: Transactional storage for campaign state and budget aggregates.
-  - **ClickHouse**: Analytical storage for raw event logs, optimized for high-volume writes (50k event batches).
-- **Partitioning**: Automated PostgreSQL partitioning to maintain query performance over time.
+### Ingestion (Tracker)
+- **Scaling**: Independent replicas behind Nginx load balancer.
+- **State**: Stateless; offloaded to sharded Redis layer.
+- **Network**: Host mode networking.
 
-## Performance Design Decisions
+### State (Sharded Redis)
+- **Sharding**: Consistent hashing by `CampaignID`.
+- **Deduplication**: 45s TTL for ClickIDs.
+- **Pacing**: Even and ASAP distribution modes.
 
-| Feature | Decision | Rationale |
-|---------|----------|-----------|
-| **Serialization** | Protobuf | Reduces payload size and CPU overhead by ~70% compared to JSON. |
-| **Networking** | Host Mode | Minimizes softirq and context switching by bypassing the virtual network stack. |
-| **Memory** | GOMEMLIMIT | Set to 700MiB/Tracker to force frequent, low-latency GC cycles, preventing OOM. |
-| **Deduplication**| Redis TTL | 45s window balances memory occupancy and protection against high-frequency duplicate bursts. |
-| **Sharding** | Redis Shards| Eliminates Redis single-thread bottleneck by distributing load across 6 cores. |
+### Persistence (Async Processor)
+- **Consumer**: Redis Streams consumer groups with DLQ and Circuit Breaker.
+- **Storage**:
+  - **PostgreSQL**: Daily partitions for event aggregates.
+  - **ClickHouse**: 90-day TTL for raw event logs.
 
-## Deployment & Configuration
+## Design Decisions
 
-### Prerequisites
-- Docker Engine with Host Networking support.
-- 16GB+ RAM (32GB recommended for full test load).
+| Component | Decision | Rationale |
+|-----------|----------|-----------|
+| Serialization | Protobuf | Binary serialization format. |
+| Networking | Host Mode | Direct access to host network stack. |
+| Memory | sync.Pool | Buffer and object reuse. |
+| Memory | GOMEMLIMIT | Hard memory limit for the Go runtime. |
+| Persistence | Redis Streams | Decoupling ingestion from database writes. |
 
-### Infrastructure Limits
-- **ClickHouse**: Limited to 4GB RAM via `memory_limit.xml`.
-- **Redis**: Each shard constrained to 768MB RAM.
-- **Trackers**: GC tuned with `GOGC=50` for faster memory recycling.
+## Deployment
 
-## Observability & Health
+### Requirements
+- Docker Engine / Docker Compose.
+- 16GB RAM.
 
-### Monitoring
-- **Grafana**: `http://localhost:3000` (Pre-provisioned dashboard: "AdPulse Ingestion Performance").
-- **Prometheus**: Scrapes metrics from all 4 trackers and the processor via host-networked endpoints.
+### Resource Limits
+- ClickHouse: 4GB RAM.
+- Redis Shards: 768MB each.
+- Trackers: GOGC=50.
 
-### Health Checks
-- **Tracker**: `/health` checks active connectivity to Postgres and all 6 Redis shards.
-- **Processor**: `/health` checks connectivity to Postgres, ClickHouse, and all 6 Redis shards.
+## Observability
+- **Grafana**: Pre-configured dashboards for ingestion and database performance.
+- **Prometheus**: Metrics from all internal components.
+- **Health Checks**: Connectivity verification for all dependencies.
 
-## Scaling Beyond 100k RPS
-To scale the system beyond current hardware limits:
-1. Increase the number of Redis shards (update consistent hashing logic in `unified_filter.go`).
-2. Deploy additional Tracker nodes on separate physical hosts and update Nginx upstream.
-3. Scale ClickHouse horizontally using a distributed cluster.
+## Scaling
+- Horizontal scaling of Tracker/Processor replicas.
+- Redis sharding for state distribution.
+- ClickHouse clustering for analytical volume.

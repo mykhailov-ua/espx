@@ -7,7 +7,7 @@ ADD COLUMN pacing_mode pacing_mode_type NOT NULL DEFAULT 'ASAP',
 ADD COLUMN daily_budget DECIMAL(15,2) NOT NULL DEFAULT 0,
 ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';
 
--- Create index for faster lookup by status and pacing for background jobs if needed
+-- Create index for lookup by status and pacing for background jobs if needed
 CREATE INDEX idx_campaigns_pacing ON campaigns(pacing_mode) WHERE status = 'ACTIVE';
 -- +goose StatementEnd
 
