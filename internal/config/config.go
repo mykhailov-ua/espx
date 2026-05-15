@@ -21,6 +21,7 @@ type Config struct {
 	RedisAddrs              []string
 	RedisPassword           Secret
 	RedisStreamName         string
+	FraudStreamName         string
 	RedisGroupName          string
 	RedisConsumerID         string
 	CHDSN                   Secret
@@ -43,6 +44,7 @@ type Config struct {
 	RateLimitPerMin         int
 	RateLimitWindowMs       int
 	DuplicateTTLSec         int
+	TTCMinMs                int
 	CHBatchSize             int
 	CHFlushIntervalMs       int
 	PartitionPreCreateDays  int
@@ -111,6 +113,7 @@ func Load() (*Config, error) {
 		RedisAddrs:              strings.Split(os.Getenv("REDIS_ADDRS"), ","),
 		RedisPassword:           Secret(os.Getenv("REDIS_PASSWORD")),
 		RedisStreamName:         os.Getenv("REDIS_STREAM_NAME"),
+		FraudStreamName:         os.Getenv("FRAUD_STREAM_NAME"),
 		RedisGroupName:          os.Getenv("REDIS_GROUP_NAME"),
 		RedisConsumerID:         os.Getenv("REDIS_CONSUMER_ID"),
 		EventBatchSize:          getEnvInt("EVENT_BATCH_SIZE", 1000),
@@ -128,6 +131,7 @@ func Load() (*Config, error) {
 		RateLimitWindowMs:       getEnvInt("RATE_LIMIT_WINDOW_MS", 60000),
 		MaxRequestBodySize:      getEnvInt64("MAX_REQUEST_BODY_SIZE", 1048576),
 		DuplicateTTLSec:         getEnvInt("DUPLICATE_TTL_SEC", 10),
+		TTCMinMs:                getEnvInt("TTC_MIN_MS", 300),
 		CHDSN:                   Secret(os.Getenv("CH_DSN")),
 		CHBatchSize:             getEnvInt("CH_BATCH_SIZE", 50000),
 		CHFlushIntervalMs:       getEnvInt("CH_FLUSH_INTERVAL_MS", 10000),
@@ -178,6 +182,9 @@ func Load() (*Config, error) {
 
 	if cfg.RedisStreamName == "" {
 		cfg.RedisStreamName = "ad:events:stream"
+	}
+	if cfg.FraudStreamName == "" {
+		cfg.FraudStreamName = "ad:fraud:stream"
 	}
 	if cfg.RedisGroupName == "" {
 		cfg.RedisGroupName = "ad:processor:group"
