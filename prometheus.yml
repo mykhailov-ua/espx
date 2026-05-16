@@ -7,4 +7,4 @@ rule_files:
 scrape_configs:
   - job_name: 'ad-event-processor'
     static_configs:
-      - targets: ['tracker:8080', 'processor:8086']
+      - targets: ['tracker:8181', 'processor:8186']

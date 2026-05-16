@@ -46,8 +46,8 @@ func TestMultiShardBudgetSync(t *testing.T) {
 
 	// Initializes two independent Redis shards to simulate a distributed budget environment.
 
-	rdb1 := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	rdb2 := redis.NewClient(&redis.Options{Addr: "localhost:6380"})
+	rdb1 := redis.NewClient(&redis.Options{Addr: "localhost:6479"})
+	rdb2 := redis.NewClient(&redis.Options{Addr: "localhost:6480"})
 
 	// Ensure we can connect or skip
 	if err := rdb1.Ping(ctx).Err(); err != nil {

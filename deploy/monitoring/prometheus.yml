@@ -3,7 +3,7 @@ global:
 scrape_configs:
   - job_name: 'tracker'
     static_configs:
-      - targets: ['127.0.0.1:8081', '127.0.0.1:8082', '127.0.0.1:8083', '127.0.0.1:8084']
+      - targets: ['127.0.0.1:8181', '127.0.0.1:8182', '127.0.0.1:8183', '127.0.0.1:8184']
   - job_name: 'processor'
     static_configs:
-      - targets: ['processor:8086']
+      - targets: ['processor:8186']

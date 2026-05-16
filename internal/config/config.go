@@ -17,6 +17,7 @@ func (s Secret) LogValue() slog.Value {
 type Config struct {
 	ServerPort              string
 	ProcessorPort           string
+	ManagementPort          string
 	DBDSN                   Secret
 	RedisAddrs              []string
 	RedisPassword           Secret
@@ -109,6 +110,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		ServerPort:              os.Getenv("SERVER_PORT"),
 		ProcessorPort:           os.Getenv("PROCESSOR_PORT"),
+		ManagementPort:          os.Getenv("MANAGEMENT_PORT"),
 		DBDSN:                   Secret(os.Getenv("DB_DSN")),
 		RedisAddrs:              strings.Split(os.Getenv("REDIS_ADDRS"), ","),
 		RedisPassword:           Secret(os.Getenv("REDIS_PASSWORD")),
@@ -171,7 +173,10 @@ func Load() (*Config, error) {
 		return nil, errors.New("SERVER_PORT is required")
 	}
 	if cfg.ProcessorPort == "" {
-		cfg.ProcessorPort = "8081"
+		cfg.ProcessorPort = "8186"
+	}
+	if cfg.ManagementPort == "" {
+		cfg.ManagementPort = "8188"
 	}
 	if cfg.DBDSN == "" {
 		return nil, errors.New("DB_DSN is required")
@@ -198,7 +203,7 @@ func Load() (*Config, error) {
 	}
 
 	if cfg.AuthServerPort == "" {
-		cfg.AuthServerPort = "50051"
+		cfg.AuthServerPort = "51051"
 	}
 	if cfg.TokenSymmetricKey == "" {
 		return nil, errors.New("TOKEN_SYMMETRIC_KEY is required")
