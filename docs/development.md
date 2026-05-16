@@ -37,7 +37,7 @@ To prevent CI/CD failures due to resource constraints (e.g., deadlocks under low
 - `lefthook.yml`: Configures the `pre-push` gatekeeper.
 
 ## Local Infrastructure
-The system uses a sharded infrastructure to handle 100k+ RPS.
+The system uses a sharded infrastructure.
 
 ```bash
 # Start 4 Trackers, 6 Redis Shards, PG, CH, and Monitoring
@@ -47,21 +47,23 @@ docker compose up -d
 ### Port Mapping
 | Service | Port(s) | Description |
 | :--- | :--- | :--- |
-| **Nginx** | 80 | Edge Load Balancer |
-| **Tracker (0-3)** | 8081-8084 | Sharded Ingestion Replicas (Host Mode) |
-| **Processor** | 8086 | Async Worker (Metrics/Health) |
-| **Redis Shards** | 6379-6384 | Sharded Cache Cluster |
-| **PostgreSQL** | 5430 | Transactional Database |
-| **ClickHouse** | 9000, 8123 | Analytical Database |
-| **Prometheus** | 9090 | Metrics Storage (Host Mode) |
-| **Grafana** | 3000 | Visualization (Host Mode) |
+| **Nginx** | 8180 | Edge Load Balancer |
+| **Tracker (0-3)** | 8181-8184 | Sharded Ingestion Replicas (Host Mode) |
+| **Processor** | 8186 | Async Worker (Metrics/Health) |
+| **Management** | 8188 | Control Plane Gateway |
+| **Auth Server** | 51051 | Internal gRPC Auth Server |
+| **Redis Shards** | 6479-6484 | Sharded Cache Cluster |
+| **PostgreSQL** | 5440 | Transactional Database |
+| **ClickHouse** | 9100, 8223 | Analytical Database |
+| **Prometheus** | 9190 | Metrics Storage (Host Mode) |
+| **Grafana** | 3100 | Visualization (Host Mode) |
 
 ## Testing & Benchmarking
 
 ### Performance Tests
 Located in `tests/load/`. Use `k6` to validate throughput and latency.
 ```bash
-# Run 100k RPS stress test
+# Run load test
 docker compose run --rm k6 run /scripts/rps_100k.js
 ```
 
@@ -71,6 +73,6 @@ Integration tests require the full infrastructure stack to be running.
 - `tests/budget_test.go`: Validates Redis-to-Postgres budget synchronization across shards.
 
 ## Debugging
-- **pprof**: Enabled on trackers (ports 8081-8084) and processor (8086).
+- **pprof**: Enabled on trackers (ports 8181-8184) and processor (8186).
 - **Logs**: Structured JSON logs via `slog`. Use `docker compose logs -f <service>` for real-time monitoring.
-- **Metrics**: Access Grafana at `http://localhost:3000` (anonymous admin access enabled).
+- **Metrics**: Access Grafana at `http://localhost:3100` (anonymous admin access enabled).
