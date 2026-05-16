@@ -31,7 +31,7 @@ func TestManagementAPI_Hardening(t *testing.T) {
 	}
 
 	svc := NewService(pool, []redis.UniversalClient{rdb}, nil, cfg)
-	h := NewHandler(svc, cfg)
+	h := NewHandler(svc, cfg, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
