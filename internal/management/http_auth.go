@@ -2,6 +2,7 @@ package management
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -27,6 +29,7 @@ func putBuffer(buf *bytes.Buffer) {
 	bufferPool.Put(buf)
 }
 
+// AuthHandler manages gateway session lifecycles and token orchestration. Bridging HTTP boundary requests to internal gRPC auth microservices enforces centralized authentication without duplicating token validation logic.
 type AuthHandler struct {
 	authClient pb.AuthServiceClient
 	tokenMaker auth.Maker
@@ -50,13 +53,14 @@ func (h *AuthHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/auth/me", h.me)
 }
 
-func setCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
+// setCookie configures strict transport security attributes on session tokens. Enforcing Secure and SameSite=Strict mitigates cross-site scripting and request forgery vulnerabilities across client browser sessions.
+func setCookie(w http.ResponseWriter, name, value, path string, maxAge int, httpOnly bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    value,
 		Path:     path,
 		MaxAge:   maxAge,
-		HttpOnly: true,
+		HttpOnly: httpOnly,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 	})
@@ -68,10 +72,11 @@ type LoginRequest struct {
 }
 
 type UserDTO struct {
-	ID         string `json:"id"`
-	Email      string `json:"email,omitempty"`
-	Role       string `json:"role"`
-	CustomerID string `json:"customer_id"`
+	ID          string   `json:"id"`
+	Email       string   `json:"email,omitempty"`
+	Role        string   `json:"role"`
+	CustomerID  string   `json:"customer_id"`
+	Permissions []string `json:"permissions,omitempty"`
 }
 
 func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
@@ -80,13 +85,13 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	defer putBuffer(buf)
 
 	if _, err := io.Copy(buf, r.Body); err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "failed to read request body")
 		return
 	}
 
 	var req LoginRequest
 	if err := json.Unmarshal(buf.Bytes(), &req); err != nil || req.Email == "" || req.Password == "" {
-		http.Error(w, "invalid login request", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid login request")
 		return
 	}
 
@@ -97,23 +102,25 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Warn("login failed", "email", req.Email, "error", err)
-		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "invalid credentials")
 		return
 	}
 
-	setCookie(w, "accessToken", resp.AccessToken, "/", 3600)
-	setCookie(w, "refreshToken", resp.RefreshToken, "/api/v1/auth", 30*24*3600)
+	setCookie(w, "accessToken", resp.AccessToken, "/", 3600, true)
+	setCookie(w, "refreshToken", resp.RefreshToken, "/api/v1/auth", 30*24*3600, true)
+	csrf := GenerateSecureToken(32)
+	setCookie(w, "csrfToken", csrf, "/", 3600, false)
+	w.Header().Set("X-CSRF-Token", csrf)
 
 	userDTO := UserDTO{
-		ID:         resp.User.ID,
-		Email:      resp.User.Email,
-		Role:       resp.User.Role,
-		CustomerID: resp.User.CustomerID,
+		ID:          resp.User.ID,
+		Email:       resp.User.Email,
+		Role:        resp.User.Role,
+		CustomerID:  resp.User.CustomerID,
+		Permissions: GetPermissionsForRole(resp.User.Role),
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(map[string]any{"user": userDTO})
+	httpresponse.JSON(w, http.StatusOK, map[string]any{"user": userDTO})
 }
 
 func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
@@ -128,19 +135,24 @@ func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
 	if err == nil && accessCookie.Value != "" && h.rdb != nil {
 		payload, errPayload := h.tokenMaker.VerifyToken(accessCookie.Value)
 		if errPayload == nil {
-			_ = h.rdb.Set(r.Context(), "revoked:token:"+payload.ID.String(), "true", time.Until(payload.ExpiredAt)).Err()
+			pipe := h.rdb.Pipeline()
+			ttl := time.Until(payload.ExpiredAt)
+			pipe.Set(r.Context(), "revoked:token:"+payload.ID.String(), "true", ttl)
+			pipe.Set(r.Context(), "revoked:session:"+payload.SessionID.String(), "true", ttl)
+			_, _ = pipe.Exec(r.Context())
 		}
 	}
 
-	setCookie(w, "accessToken", "", "/", -1)
-	setCookie(w, "refreshToken", "", "/api/v1/auth", -1)
-	w.WriteHeader(http.StatusNoContent)
+	setCookie(w, "accessToken", "", "/", -1, true)
+	setCookie(w, "refreshToken", "", "/api/v1/auth", -1, true)
+	setCookie(w, "csrfToken", "", "/", -1, false)
+	httpresponse.JSON(w, http.StatusNoContent, nil)
 }
 
 func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("refreshToken")
 	if err != nil || cookie.Value == "" {
-		http.Error(w, "missing refresh token", http.StatusUnauthorized)
+		httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing refresh token")
 		return
 	}
 
@@ -149,52 +161,56 @@ func (h *AuthHandler) refresh(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Warn("refresh token failed", "error", err)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 
-	setCookie(w, "accessToken", resp.AccessToken, "/", 3600)
-	setCookie(w, "refreshToken", resp.RefreshToken, "/api/v1/auth", 30*24*3600)
+	setCookie(w, "accessToken", resp.AccessToken, "/", 3600, true)
+	setCookie(w, "refreshToken", resp.RefreshToken, "/api/v1/auth", 30*24*3600, true)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"refreshed"}`))
+	httpresponse.JSON(w, http.StatusOK, map[string]string{"status": "refreshed"})
 }
 
 func (h *AuthHandler) me(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("accessToken")
 	if err != nil || cookie.Value == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 
 	payload, err := h.tokenMaker.VerifyToken(cookie.Value)
 	if err != nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 		return
 	}
 
 	if h.rdb != nil {
-		revoked, _ := h.rdb.Exists(r.Context(), "revoked:token:"+payload.ID.String()).Result()
-		if revoked > 0 {
-			http.Error(w, "unauthorized: token revoked", http.StatusUnauthorized)
-			return
+		ctxRevoked, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+		defer cancel()
+		
+		cmds, errPipe := h.rdb.Pipelined(ctxRevoked, func(pipe redis.Pipeliner) error {
+			pipe.Exists(ctxRevoked, "revoked:token:"+payload.ID.String())
+			pipe.Exists(ctxRevoked, "revoked:session:"+payload.SessionID.String())
+			pipe.Exists(ctxRevoked, "revoked:user:"+payload.UserID.String())
+			return nil
+		})
+
+		if errPipe == nil && len(cmds) == 3 {
+			for _, cmd := range cmds {
+				if exists, _ := cmd.(*redis.IntCmd).Result(); exists > 0 {
+					httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized: token revoked")
+					return
+				}
+			}
 		}
 	}
 
-	buf := bufferPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer putBuffer(buf)
-
 	dto := UserDTO{
-		ID:         payload.UserID.String(),
-		Role:       payload.Role,
-		CustomerID: payload.CustomerID.String(),
+		ID:          payload.UserID.String(),
+		Role:        payload.Role,
+		CustomerID:  payload.CustomerID.String(),
+		Permissions: GetPermissionsForRole(payload.Role),
 	}
 
-	_ = json.NewEncoder(buf).Encode(dto)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(buf.Bytes())
+	httpresponse.JSON(w, http.StatusOK, dto)
 }

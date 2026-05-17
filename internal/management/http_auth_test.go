@@ -90,9 +90,9 @@ func TestAuthHandler_Login(t *testing.T) {
 		assert.Equal(t, http.StatusOK, resp.Code)
 
 		cookies := resp.Header().Values("Set-Cookie")
-		require.Len(t, cookies, 2)
+		require.Len(t, cookies, 3)
 
-		var accessSet, refreshSet bool
+		var accessSet, refreshSet, csrfSet bool
 		for _, c := range cookies {
 			if strings.HasPrefix(c, "accessToken=") {
 				accessSet = true
@@ -108,15 +108,25 @@ func TestAuthHandler_Login(t *testing.T) {
 				assert.Contains(t, c, "SameSite=Strict")
 				assert.Contains(t, c, "Max-Age=2592000") // 30 days
 			}
+			if strings.HasPrefix(c, "csrfToken=") {
+				csrfSet = true
+				assert.NotContains(t, c, "HttpOnly")
+				assert.Contains(t, c, "Secure")
+				assert.Contains(t, c, "SameSite=Strict")
+				assert.Contains(t, c, "Max-Age=3600")
+			}
 		}
 		assert.True(t, accessSet)
 		assert.True(t, refreshSet)
+		assert.True(t, csrfSet)
+		assert.NotEmpty(t, resp.Header().Get("X-CSRF-Token"))
 
 		var res map[string]UserDTO
 		err := json.NewDecoder(resp.Body).Decode(&res)
 		require.NoError(t, err)
 		assert.Equal(t, "user-123", res["user"].ID)
 		assert.Equal(t, "admin", res["user"].Role)
+		assert.Contains(t, res["user"].Permissions, "customers:write")
 	})
 
 	t.Run("InvalidCredentials", func(t *testing.T) {
@@ -208,7 +218,8 @@ func TestAuthHandler_Me(t *testing.T) {
 
 	userID := uuid.New()
 	customerID := uuid.New()
-	token, err := tokenMaker.CreateToken(userID, "admin", customerID, time.Hour)
+	sessionID := uuid.New()
+	token, err := tokenMaker.CreateToken(userID, sessionID, "admin", customerID, time.Hour)
 	require.NoError(t, err)
 
 	h := NewAuthHandler(nil, tokenMaker, nil, cfg)
@@ -229,4 +240,5 @@ func TestAuthHandler_Me(t *testing.T) {
 	assert.Equal(t, userID.String(), dto.ID)
 	assert.Equal(t, "admin", dto.Role)
 	assert.Equal(t, customerID.String(), dto.CustomerID)
+	assert.Contains(t, dto.Permissions, "campaigns:write")
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,7 +28,7 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 	targetHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, ok := GetUser(r.Context())
 		if !ok {
-			http.Error(w, "user not in context", http.StatusInternalServerError)
+			httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "user not in context")
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -49,7 +51,7 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 	t.Run("ValidToken_AllowedRole", func(t *testing.T) {
 		handler := m.RequireAuth("M", "SA")(targetHandler)
 
-		token, _ := tokenMaker.CreateToken(uuid.New(), "manager", uuid.New(), time.Hour)
+		token, _ := tokenMaker.CreateToken(uuid.New(), uuid.New(), "manager", uuid.New(), time.Hour)
 		req, _ := http.NewRequest("GET", "/protected", nil)
 		req.AddCookie(&http.Cookie{Name: "accessToken", Value: token})
 		resp := httptest.NewRecorder()
@@ -63,7 +65,7 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 	t.Run("ValidToken_ForbiddenRole", func(t *testing.T) {
 		handler := m.RequireAuth("SA")(targetHandler)
 
-		token, _ := tokenMaker.CreateToken(uuid.New(), "customer", uuid.New(), time.Hour)
+		token, _ := tokenMaker.CreateToken(uuid.New(), uuid.New(), "customer", uuid.New(), time.Hour)
 		req, _ := http.NewRequest("GET", "/protected", nil)
 		req.AddCookie(&http.Cookie{Name: "accessToken", Value: token})
 		resp := httptest.NewRecorder()
@@ -87,7 +89,7 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 	t.Run("ExpiredToken", func(t *testing.T) {
 		handler := m.RequireAuth("SA")(targetHandler)
 
-		token, _ := tokenMaker.CreateToken(uuid.New(), "SA", uuid.New(), -time.Hour)
+		token, _ := tokenMaker.CreateToken(uuid.New(), uuid.New(), "SA", uuid.New(), -time.Hour)
 		req, _ := http.NewRequest("GET", "/protected", nil)
 		req.AddCookie(&http.Cookie{Name: "accessToken", Value: token})
 		resp := httptest.NewRecorder()
@@ -96,4 +98,40 @@ func TestAuthMiddleware_RequireAuth(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, resp.Code)
 	})
+}
+
+func TestAuthMiddleware_RedisOutage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	rdb, cleanupRedis := database.SetupTestRedis(t)
+	defer cleanupRedis()
+
+	// Close client to simulate network outage
+	_ = rdb.Close()
+
+	cfg := &config.Config{
+		TokenSymmetricKey: "01234567890123456789012345678901",
+	}
+	tokenMaker, err := auth.NewPasetoMaker(string(cfg.TokenSymmetricKey))
+	require.NoError(t, err)
+
+	m := NewAuthMiddleware(tokenMaker, rdb, cfg)
+
+	targetHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	handler := m.RequireAuth("SA")(targetHandler)
+
+	token, _ := tokenMaker.CreateToken(uuid.New(), uuid.New(), "SA", uuid.New(), time.Hour)
+	req, _ := http.NewRequest("GET", "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: "accessToken", Value: token})
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.Code)
+	assert.Contains(t, resp.Body.String(), "security subsystem unavailable")
 }

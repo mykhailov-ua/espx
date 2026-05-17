@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -61,26 +62,38 @@ func (m *AuthMiddleware) RequireAuth(allowedRoles ...string) func(http.HandlerFu
 
 			cookie, err := r.Cookie("accessToken")
 			if err != nil || cookie.Value == "" {
-				http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
+				httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized: missing token")
 				return
 			}
 
 			payload, err := m.tokenMaker.VerifyToken(cookie.Value)
 			if err != nil {
-				http.Error(w, "unauthorized: invalid token", http.StatusUnauthorized)
+				httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized: invalid token")
 				return
 			}
 
 			if m.rdb != nil {
 				ctxTimeout, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
-				revoked, rdbErr := m.rdb.Exists(ctxTimeout, "revoked:token:"+payload.ID.String()).Result()
-				cancel()
+				defer cancel()
+				
+				cmds, errPipe := m.rdb.Pipelined(ctxTimeout, func(pipe redis.Pipeliner) error {
+					pipe.Exists(ctxTimeout, "revoked:token:"+payload.ID.String())
+					pipe.Exists(ctxTimeout, "revoked:session:"+payload.SessionID.String())
+					pipe.Exists(ctxTimeout, "revoked:user:"+payload.UserID.String())
+					return nil
+				})
 
-				if rdbErr != nil {
-					slog.Warn("redis revocation check failed, circuit breaker active (using local validation)", "error", rdbErr)
-				} else if revoked > 0 {
-					http.Error(w, "unauthorized: session revoked", http.StatusUnauthorized)
+				if errPipe != nil {
+					slog.Error("redis revocation check failed, blocking request to prevent security bypass", "error", errPipe)
+					httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error: security subsystem unavailable")
 					return
+				}
+				
+				for _, cmd := range cmds {
+					if exists, _ := cmd.(*redis.IntCmd).Result(); exists > 0 {
+						httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized: session revoked")
+						return
+					}
 				}
 			}
 
@@ -105,7 +118,7 @@ func (m *AuthMiddleware) RequireAuth(allowedRoles ...string) func(http.HandlerFu
 			}
 
 			if !roleAllowed {
-				http.Error(w, "forbidden: insufficient permissions", http.StatusForbidden)
+				httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: insufficient permissions")
 				return
 			}
 
