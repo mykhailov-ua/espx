@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 type contextKey string
@@ -21,7 +24,7 @@ const (
 	authorizationTypeBearer = "bearer"
 )
 
-func AuthMiddleware(tokenMaker Maker, allowedRoles ...string) func(http.Handler) http.Handler {
+func AuthMiddleware(tokenMaker Maker, rdb redis.UniversalClient, allowedRoles ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authorizationHeader := r.Header.Get(authorizationHeaderKey)
@@ -50,6 +53,27 @@ func AuthMiddleware(tokenMaker Maker, allowedRoles ...string) func(http.Handler)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
+			}
+
+			if rdb != nil {
+				ctxRevoked, cancel := context.WithTimeout(r.Context(), 100*time.Millisecond)
+				defer cancel()
+				
+				cmds, errPipe := rdb.Pipelined(ctxRevoked, func(pipe redis.Pipeliner) error {
+					pipe.Exists(ctxRevoked, "revoked:token:"+payload.ID.String())
+					pipe.Exists(ctxRevoked, "revoked:session:"+payload.SessionID.String())
+					pipe.Exists(ctxRevoked, "revoked:user:"+payload.UserID.String())
+					return nil
+				})
+
+				if errPipe == nil && len(cmds) == 3 {
+					for _, cmd := range cmds {
+						if exists, _ := cmd.(*redis.IntCmd).Result(); exists > 0 {
+							http.Error(w, "token revoked", http.StatusUnauthorized)
+							return
+						}
+					}
+				}
 			}
 
 			if len(allowedRoles) > 0 {

@@ -7,6 +7,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
@@ -59,6 +63,8 @@ func main() {
 		uint8(cfg.Argon2Parallelism),
 	)
 	authService := auth.NewService(repo, tokenMaker, hasher, lockoutLimiter, rdb)
+	cleanupWorker := auth.NewSessionCleanupWorker(authService)
+	go cleanupWorker.Start(ctx, time.Minute)
 	grpcHandler := auth.NewHandler(authService, cfg)
 
 	lis, err := net.Listen("tcp", ":"+cfg.AuthServerPort)
@@ -69,7 +75,19 @@ func main() {
 
 	server := google_grpc.NewServer()
 	pb.RegisterAuthServiceServer(server, grpcHandler)
-	reflection.Register(server)
+	
+	if cfg.Env != "production" {
+		reflection.Register(server)
+	}
+
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		slog.Info("starting auth metrics server", "port", cfg.AuthMetricsPort)
+		if err := http.ListenAndServe(":"+cfg.AuthMetricsPort, mux); err != nil && err != http.ErrServerClosed {
+			slog.Error("metrics server failed", "error", err)
+		}
+	}()
 
 	slog.Info("starting auth gRPC server", "port", cfg.AuthServerPort)
 

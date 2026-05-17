@@ -34,24 +34,45 @@ func NewHandler(service *Service, cfg *config.Config) *Handler {
 	}
 }
 
-func extractClientIP(ctx context.Context) string {
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if xff := md.Get("x-forwarded-for"); len(xff) > 0 {
-			// Extract the first IP if there is a comma-separated list
-			ips := strings.Split(xff[0], ",")
-			if len(ips) > 0 {
-				return strings.TrimSpace(ips[0])
-			}
-		}
-		if xri := md.Get("x-real-ip"); len(xri) > 0 {
-			return xri[0]
+// extractClientIP resolves the origin IP by evaluating X-Forwarded-For headers against a whitelist of trusted proxies.
+// This prevents IP spoofing attacks when the service is deployed behind edge load balancers.
+func (h *Handler) extractClientIP(ctx context.Context) string {
+	peerIP := "unknown"
+	if p, ok := peer.FromContext(ctx); ok {
+		parts := strings.Split(p.Addr.String(), ":")
+		if len(parts) > 0 {
+			peerIP = parts[0]
 		}
 	}
 
-	if p, ok := peer.FromContext(ctx); ok {
-		return p.Addr.String()
+	isTrusted := false
+	for _, tp := range h.cfg.TrustedProxies {
+		if tp != "" && peerIP == tp {
+			isTrusted = true
+			break
+		}
 	}
-	return "unknown"
+
+	// Trust loopback addresses to facilitate local testing and sidecar proxy deployments.
+	if peerIP == "127.0.0.1" || peerIP == "::1" || peerIP == "bufconn" {
+		isTrusted = true
+	}
+
+	if isTrusted {
+		if md, ok := metadata.FromIncomingContext(ctx); ok {
+			if xff := md.Get("x-forwarded-for"); len(xff) > 0 {
+				ips := strings.Split(xff[0], ",")
+				if len(ips) > 0 && strings.TrimSpace(ips[0]) != "" {
+					return strings.TrimSpace(ips[0])
+				}
+			}
+			if xri := md.Get("x-real-ip"); len(xri) > 0 && xri[0] != "" {
+				return xri[0]
+			}
+		}
+	}
+
+	return peerIP
 }
 
 func (h *Handler) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
@@ -77,7 +98,7 @@ func (h *Handler) Login(ctx context.Context, req *pb.LoginRequest) (*pb.LoginRes
 		duration = time.Duration(h.cfg.DefaultTokenDurationHrs) * time.Hour
 	}
 
-	clientIP := extractClientIP(ctx)
+	clientIP := h.extractClientIP(ctx)
 
 	userAgent := "grpc-client"
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -134,6 +155,9 @@ func (h *Handler) RevokeToken(ctx context.Context, req *pb.RevokeTokenRequest) (
 func mapError(err error) error {
 	if err == nil {
 		return nil
+	}
+	if errors.Is(err, ErrRateLimitExceeded) {
+		return status.Errorf(codes.ResourceExhausted, "%v", err)
 	}
 	if errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrExpiredToken) || errors.Is(err, ErrAccountLocked) || errors.Is(err, ErrSessionBlocked) {
 		return status.Errorf(codes.Unauthenticated, "%v", err)

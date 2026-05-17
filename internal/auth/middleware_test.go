@@ -23,7 +23,8 @@ func addAuthorization(
 	customerID uuid.UUID,
 	duration time.Duration,
 ) {
-	token, err := tokenMaker.CreateToken(userID, role, customerID, duration)
+	sessionID := uuid.New()
+	token, err := tokenMaker.CreateToken(userID, sessionID, role, customerID, duration)
 	require.NoError(t, err)
 
 	authorizationHeader := fmt.Sprintf("%s %s", authorizationType, token)
@@ -106,7 +107,7 @@ func TestAuthMiddleware(t *testing.T) {
 			require.NoError(t, err)
 
 			authPath := "/auth"
-			handler := AuthMiddleware(tokenMaker, tc.allowedRoles...)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler := AuthMiddleware(tokenMaker, nil, tc.allowedRoles...)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}))
 
