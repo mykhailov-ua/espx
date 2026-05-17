@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
@@ -51,8 +52,10 @@ func TestManagementAPI_Hardening(t *testing.T) {
 		mux.ServeHTTP(resp, req)
 		assert.Equal(t, http.StatusNoContent, resp.Code)
 
-		v, _ := rdb.Get(context.Background(), "config:version").Int64()
-		assert.Equal(t, int64(1), v)
+		assert.Eventually(t, func() bool {
+			v, _ := rdb.Get(context.Background(), "config:version").Int64()
+			return v == int64(1)
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 
 	t.Run("Blacklist_Success", func(t *testing.T) {

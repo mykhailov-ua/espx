@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
@@ -48,15 +49,16 @@ func TestManagementService_CancelCampaign(t *testing.T) {
 	err = svc.CancelCampaign(ctx, campaignID, "db.User request")
 	require.NoError(t, err)
 
-	var balance string
-	err = pool.QueryRow(ctx, "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&balance)
-	require.NoError(t, err)
-	assert.Equal(t, "770.00", balance)
-
-	var status string
-	err = pool.QueryRow(ctx, "SELECT status FROM campaigns WHERE id = $1", campaignID).Scan(&status)
-	require.NoError(t, err)
-	assert.Equal(t, "DELETED", status)
+	assert.Eventually(t, func() bool {
+		var balance string
+		err := pool.QueryRow(ctx, "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&balance)
+		if err != nil || balance != "770.00" {
+			return false
+		}
+		var status string
+		err = pool.QueryRow(ctx, "SELECT status FROM campaigns WHERE id = $1", campaignID).Scan(&status)
+		return err == nil && status == "DELETED"
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestManagementService_Idempotency(t *testing.T) {

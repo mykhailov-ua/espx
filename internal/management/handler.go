@@ -10,10 +10,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"github.com/shopspring/decimal"
 	"golang.org/x/time/rate"
 )
 
+// Handler routes administrative and customer management API endpoints. Encapsulating rate limiting, RBAC validation middleware, and service delegation in a single multiplexer handler ensures consistent boundary enforcement.
 type Handler struct {
 	svc            *Service
 	cfg            *config.Config
@@ -60,7 +62,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 func (h *Handler) limit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !h.limiter.Allow() {
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			httpresponse.Error(w, http.StatusTooManyRequests, "TOO_MANY_REQUESTS", "too many requests")
 			return
 		}
 		next(w, r)
@@ -74,7 +76,7 @@ func (h *Handler) auth(next http.HandlerFunc, allowedRoles ...string) http.Handl
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := r.Header.Get("X-Admin-API-Key")
 		if key == "" || key != string(h.cfg.AdminAPIKey) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			httpresponse.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 			return
 		}
 		next(w, r)
@@ -89,7 +91,7 @@ func (h *Handler) createCustomer(w http.ResponseWriter, r *http.Request) {
 		Currency string          `json:"currency"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 	if req.ID == uuid.Nil {
@@ -97,19 +99,17 @@ func (h *Handler) createCustomer(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.svc.CreateCustomer(r.Context(), req.ID, req.Name, req.Balance, req.Currency); err != nil {
 		slog.Error("failed to create customer", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": req.ID})
+	httpresponse.JSON(w, http.StatusCreated, map[string]any{"id": req.ID})
 }
 
 func (h *Handler) topUpBalance(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	customerID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid customer id", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid customer id")
 		return
 	}
 	var req struct {
@@ -117,16 +117,16 @@ func (h *Handler) topUpBalance(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := io.ReadAll(r.Body)
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 	hash := h.svc.GenerateIdempotencyHash(customerID, req)
 	if err := h.svc.TopUpBalance(r.Context(), customerID, req.Amount, hash); err != nil {
 		slog.Error("failed to top up balance", "error", err, "customer_id", customerID)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpresponse.JSON(w, http.StatusNoContent, nil)
 }
 
 func (h *Handler) createCampaign(w http.ResponseWriter, r *http.Request) {
@@ -143,17 +143,17 @@ func (h *Handler) createCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := io.ReadAll(r.Body)
 	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 	if req.CustomerID == uuid.Nil {
-		http.Error(w, "customer_id is required", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "customer_id is required")
 		return
 	}
 
 	u, ok := GetUser(r.Context())
 	if ok && u.Role == "C" && req.CustomerID != u.CustomerID {
-		http.Error(w, "forbidden: cannot create campaign for another customer", http.StatusForbidden)
+		httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: cannot create campaign for another customer")
 		return
 	}
 
@@ -173,19 +173,17 @@ func (h *Handler) createCampaign(w http.ResponseWriter, r *http.Request) {
 	id, err := h.svc.CreateCampaign(r.Context(), req.CustomerID, req.Name, req.BudgetLimit, pacing, req.DailyBudget, req.Timezone, req.FreqLimit, req.FreqWindow, req.TargetCountries, hash)
 	if err != nil {
 		slog.Error("failed to create campaign", "error", err, "customer_id", req.CustomerID)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(map[string]any{"id": id})
+	httpresponse.JSON(w, http.StatusCreated, map[string]any{"id": id})
 }
 
 func (h *Handler) cancelCampaign(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	campaignID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid campaign id", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid campaign id")
 		return
 	}
 	var req struct {
@@ -197,31 +195,31 @@ func (h *Handler) cancelCampaign(w http.ResponseWriter, r *http.Request) {
 	if ok && u.Role == "C" {
 		camp, errCamp := h.svc.GetCampaign(r.Context(), campaignID)
 		if errCamp != nil || uuid.UUID(camp.CustomerID.Bytes) != u.CustomerID {
-			http.Error(w, "forbidden: campaign belongs to another customer", http.StatusForbidden)
+			httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: campaign belongs to another customer")
 			return
 		}
 	}
 
 	if err := h.svc.CancelCampaign(r.Context(), campaignID, req.Reason); err != nil {
 		slog.Error("failed to cancel campaign", "error", err, "campaign_id", campaignID)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpresponse.JSON(w, http.StatusAccepted, nil)
 }
 
 func (h *Handler) updateSettings(w http.ResponseWriter, r *http.Request) {
 	var settings map[string]string
 	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 	if err := h.svc.UpdateSettings(r.Context(), settings); err != nil {
 		slog.Error("failed to update settings", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpresponse.JSON(w, http.StatusNoContent, nil)
 }
 
 func (h *Handler) blockIP(w http.ResponseWriter, r *http.Request) {
@@ -230,15 +228,15 @@ func (h *Handler) blockIP(w http.ResponseWriter, r *http.Request) {
 		Source string `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IP == "" {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 	if err := h.svc.BlockIP(r.Context(), req.IP, req.Source); err != nil {
 		slog.Error("failed to block ip", "error", err, "ip", req.IP)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
+	httpresponse.JSON(w, http.StatusCreated, nil)
 }
 
 func (h *Handler) unblockIP(w http.ResponseWriter, r *http.Request) {
@@ -247,40 +245,27 @@ func (h *Handler) unblockIP(w http.ResponseWriter, r *http.Request) {
 		Source string `json:"source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IP == "" {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
 	}
 	if err := h.svc.UnblockIP(r.Context(), req.IP, req.Source); err != nil {
 		slog.Error("failed to unblock ip", "error", err, "ip", req.IP)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpresponse.JSON(w, http.StatusNoContent, nil)
 }
 
 func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
-	limitStr := r.URL.Query().Get("limit")
-	offsetStr := r.URL.Query().Get("offset")
-
-	limit := int32(50)
-	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-		limit = int32(l)
-	}
-
-	offset := int32(0)
-	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
-		offset = int32(o)
-	}
-
+	limit, offset := parsePagination(r)
 	logs, err := h.svc.ListAuditLogs(r.Context(), limit, offset)
 	if err != nil {
 		slog.Error("failed to list audit logs", "error", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal error")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(logs)
+	httpresponse.JSON(w, http.StatusOK, logs)
 }
 
 func parsePagination(r *http.Request) (int32, int32) {
@@ -303,50 +288,48 @@ func (h *Handler) listCustomers(w http.ResponseWriter, r *http.Request) {
 	customers, total, err := h.svc.ListCustomers(r.Context(), limit, offset)
 	if err != nil {
 		slog.Error("failed to list customers", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
 	w.Header().Set("X-Total-Count", strconv.FormatInt(total, 10))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(customers)
+	httpresponse.JSON(w, http.StatusOK, customers)
 }
 
 func (h *Handler) getCustomer(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	customerID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid customer id", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid customer id")
 		return
 	}
 
 	u, ok := GetUser(r.Context())
 	if ok && u.Role == "C" && u.CustomerID != customerID {
-		http.Error(w, "forbidden: cannot access another customer", http.StatusForbidden)
+		httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: cannot access another customer")
 		return
 	}
 
 	customer, err := h.svc.GetCustomerDTO(r.Context(), customerID)
 	if err != nil {
-		http.Error(w, "customer not found", http.StatusNotFound)
+		httpresponse.Error(w, http.StatusNotFound, "NOT_FOUND", "customer not found")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(customer)
+	httpresponse.JSON(w, http.StatusOK, customer)
 }
 
 func (h *Handler) getCustomerLedger(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	customerID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid customer id", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid customer id")
 		return
 	}
 
 	u, ok := GetUser(r.Context())
 	if ok && u.Role == "C" && u.CustomerID != customerID {
-		http.Error(w, "forbidden: cannot access another customer", http.StatusForbidden)
+		httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: cannot access another customer")
 		return
 	}
 
@@ -354,13 +337,12 @@ func (h *Handler) getCustomerLedger(w http.ResponseWriter, r *http.Request) {
 	ledger, total, err := h.svc.ListCustomerLedger(r.Context(), customerID, limit, offset)
 	if err != nil {
 		slog.Error("failed to list customer ledger", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
 	w.Header().Set("X-Total-Count", strconv.FormatInt(total, 10))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ledger)
+	httpresponse.JSON(w, http.StatusOK, ledger)
 }
 
 func (h *Handler) listCampaigns(w http.ResponseWriter, r *http.Request) {
@@ -382,44 +364,42 @@ func (h *Handler) listCampaigns(w http.ResponseWriter, r *http.Request) {
 	campaigns, total, err := h.svc.ListCampaigns(r.Context(), custID, status, limit, offset)
 	if err != nil {
 		slog.Error("failed to list campaigns", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
 	w.Header().Set("X-Total-Count", strconv.FormatInt(total, 10))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(campaigns)
+	httpresponse.JSON(w, http.StatusOK, campaigns)
 }
 
 func (h *Handler) getCampaign(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	campaignID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid campaign id", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid campaign id")
 		return
 	}
 
 	campaign, err := h.svc.GetCampaignDTO(r.Context(), campaignID)
 	if err != nil {
-		http.Error(w, "campaign not found", http.StatusNotFound)
+		httpresponse.Error(w, http.StatusNotFound, "NOT_FOUND", "campaign not found")
 		return
 	}
 
 	u, ok := GetUser(r.Context())
 	if ok && u.Role == "C" && campaign.CustomerID != u.CustomerID.String() {
-		http.Error(w, "forbidden: cannot access another customer's campaign", http.StatusForbidden)
+		httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: cannot access another customer's campaign")
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(campaign)
+	httpresponse.JSON(w, http.StatusOK, campaign)
 }
 
 func (h *Handler) getCampaignHistory(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	campaignID, err := uuid.Parse(idStr)
 	if err != nil {
-		http.Error(w, "invalid campaign id", http.StatusBadRequest)
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid campaign id")
 		return
 	}
 
@@ -427,7 +407,7 @@ func (h *Handler) getCampaignHistory(w http.ResponseWriter, r *http.Request) {
 	if ok && u.Role == "C" {
 		camp, errCamp := h.svc.GetCampaign(r.Context(), campaignID)
 		if errCamp != nil || uuid.UUID(camp.CustomerID.Bytes) != u.CustomerID {
-			http.Error(w, "forbidden: cannot access another customer's campaign", http.StatusForbidden)
+			httpresponse.Error(w, http.StatusForbidden, "FORBIDDEN", "forbidden: cannot access another customer's campaign")
 			return
 		}
 	}
@@ -436,13 +416,12 @@ func (h *Handler) getCampaignHistory(w http.ResponseWriter, r *http.Request) {
 	history, total, err := h.svc.ListStatusHistory(r.Context(), campaignID, limit, offset)
 	if err != nil {
 		slog.Error("failed to list campaign history", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
 	w.Header().Set("X-Total-Count", strconv.FormatInt(total, 10))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(history)
+	httpresponse.JSON(w, http.StatusOK, history)
 }
 
 func (h *Handler) listBlacklist(w http.ResponseWriter, r *http.Request) {
@@ -450,23 +429,21 @@ func (h *Handler) listBlacklist(w http.ResponseWriter, r *http.Request) {
 	items, total, err := h.svc.ListBlacklist(r.Context(), limit, offset)
 	if err != nil {
 		slog.Error("failed to list blacklist", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
 	w.Header().Set("X-Total-Count", strconv.FormatInt(total, 10))
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(items)
+	httpresponse.JSON(w, http.StatusOK, items)
 }
 
 func (h *Handler) getSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := h.svc.GetSettings(r.Context())
 	if err != nil {
 		slog.Error("failed to get settings", "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", err.Error())
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(settings)
+	httpresponse.JSON(w, http.StatusOK, settings)
 }

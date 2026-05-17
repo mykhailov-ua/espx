@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
@@ -61,9 +62,10 @@ func TestManagementAPI_System(t *testing.T) {
 		assert.Equal(t, "0.05", res["click_amount"])
 
 		// Verify Redis
-		val, err := rdb.HGet(context.Background(), "config:values", "rate_limit_per_min").Result()
-		require.NoError(t, err)
-		assert.Equal(t, "100", val)
+		assert.Eventually(t, func() bool {
+			val, err := rdb.HGet(context.Background(), "config:values", "rate_limit_per_min").Result()
+			return err == nil && val == "100"
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 
 	t.Run("BlacklistCycle", func(t *testing.T) {

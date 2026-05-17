@@ -103,11 +103,15 @@ func main() {
 	authHandler.RegisterRoutes(mux)
 	mgmtHandler.RegisterRoutes(mux)
 
+	corsMdl := management.NewCORSMiddleware(cfg.AllowedOrigins)
+	csrfMdl := management.NewCSRFMiddleware()
+	gatewayHandler := corsMdl(csrfMdl(mux))
+
 	slog.Info("starting management gateway server", "port", cfg.ManagementPort, "auth_target", authTarget)
 
 	server := &http.Server{
 		Addr:              ":" + cfg.ManagementPort,
-		Handler:           mux,
+		Handler:           gatewayHandler,
 		ReadHeaderTimeout: time.Duration(cfg.HttpReadHeaderTimeoutMs) * time.Millisecond,
 		ReadTimeout:       time.Duration(cfg.HttpReadTimeoutMs) * time.Millisecond,
 		WriteTimeout:      time.Duration(cfg.HttpWriteTimeoutMs) * time.Millisecond,

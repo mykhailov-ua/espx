@@ -39,6 +39,7 @@ func TestRegistryWatch(t *testing.T) {
 	cfg := &config.Config{
 		CampaignUpdateChannel: channel,
 	}
+	cfg.Lifecycle.WaitTimeoutMs = 1
 	sharder := ads.NewJumpHashSharder(1)
 	svc := NewService(pool, []redis.UniversalClient{rdb}, sharder, cfg)
 
@@ -52,7 +53,6 @@ func TestRegistryWatch(t *testing.T) {
 		return registry.Exists(campaignID)
 	}, 2*time.Second, 100*time.Millisecond)
 
-	cfg.Lifecycle.WaitTimeoutMs = 1
 	err = svc.CancelCampaign(ctx, campaignID, "Test Sync")
 	require.NoError(t, err)
 

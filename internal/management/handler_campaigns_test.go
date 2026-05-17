@@ -1,11 +1,13 @@
 package management
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
@@ -133,5 +135,22 @@ func TestManagementAPI_Campaigns(t *testing.T) {
 		mux.ServeHTTP(resp, req.WithContext(ctx))
 
 		assert.Equal(t, http.StatusForbidden, resp.Code)
+	})
+
+	t.Run("CancelCampaign_Accepted", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"reason": "User requested cancellation"})
+		req, _ := http.NewRequest("DELETE", "/admin/campaigns/"+campID.String(), bytes.NewReader(body))
+		req.Header.Set("X-Admin-API-Key", "test-secret")
+
+		resp := httptest.NewRecorder()
+		mux.ServeHTTP(resp, req)
+
+		assert.Equal(t, http.StatusAccepted, resp.Code)
+
+		assert.Eventually(t, func() bool {
+			var status string
+			_ = pool.QueryRow(context.Background(), "SELECT status FROM campaigns WHERE id = $1", campID).Scan(&status)
+			return status == "DELETED"
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 }

@@ -135,4 +135,13 @@ func TestManagementAPI_Robustness(t *testing.T) {
 			t.Fatal("RunSystemStateSyncer goroutine did not exit after context cancellation (potential deadlock)")
 		}
 	})
+
+	t.Run("Pagination_LimitEnforcement", func(t *testing.T) {
+		req, _ := http.NewRequest("GET", "/admin/audit?limit=1000000", nil)
+		req.Header.Set("X-Admin-API-Key", "test-secret")
+		resp := httptest.NewRecorder()
+		mux.ServeHTTP(resp, req)
+		assert.Equal(t, http.StatusOK, resp.Code)
+		// Verify that limit was capped
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
@@ -38,9 +39,11 @@ func TestEdge_RoundingAndSmallAmounts(t *testing.T) {
 	err = svc.CancelCampaign(context.Background(), id, "Too small")
 	require.NoError(t, err)
 
-	var finalBalance string
-	_ = pool.QueryRow(context.Background(), "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&finalBalance)
-	assert.Equal(t, "99.89", finalBalance)
+	assert.Eventually(t, func() bool {
+		var finalBalance string
+		_ = pool.QueryRow(context.Background(), "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&finalBalance)
+		return finalBalance == "99.89"
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 func TestEdge_ConcurrentBalanceDepletion(t *testing.T) {
@@ -105,7 +108,9 @@ func TestEdge_ResumingStuckSettlement(t *testing.T) {
 	err := svc.CancelCampaign(context.Background(), campaignID, "Resume")
 	require.NoError(t, err)
 
-	var status string
-	_ = pool.QueryRow(context.Background(), "SELECT status FROM campaigns WHERE id = $1", campaignID).Scan(&status)
-	assert.Equal(t, "DELETED", status)
+	assert.Eventually(t, func() bool {
+		var status string
+		_ = pool.QueryRow(context.Background(), "SELECT status FROM campaigns WHERE id = $1", campaignID).Scan(&status)
+		return status == "DELETED"
+	}, 2*time.Second, 20*time.Millisecond)
 }

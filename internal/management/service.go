@@ -28,12 +28,17 @@ type Service struct {
 }
 
 func NewService(pool *pgxpool.Pool, rdbs []redis.UniversalClient, sharder ads.Sharder, cfg *config.Config) *Service {
-	return &Service{
+	s := &Service{
 		pool:    pool,
 		rdbs:    rdbs,
 		sharder: sharder,
 		cfg:     cfg,
 	}
+	w := NewOutboxWorker(s)
+	go w.Start(context.Background(), 20*time.Millisecond)
+	dw := NewCampaignDrainWorker(s)
+	go dw.Start(context.Background(), 20*time.Millisecond)
+	return s
 }
 
 func (s *Service) GetCampaign(ctx context.Context, id uuid.UUID) (db.Campaign, error) {
@@ -66,7 +71,7 @@ func (s *Service) GenerateIdempotencyHash(customerID uuid.UUID, params any) stri
 func (s *Service) TopUpBalance(ctx context.Context, customerID uuid.UUID, amount decimal.Decimal, idempotencyKey string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		_, err := q.GetLedgerByHash(ctx, pgtype.Text{String: idempotencyKey, Valid: true})
+		_, err := q.GetLedgerByHashForUpdate(ctx, pgtype.Text{String: idempotencyKey, Valid: true})
 		if err == nil {
 			return nil
 		}
@@ -97,7 +102,7 @@ func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, name
 	campaignID, _ := uuid.NewV7()
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		if existing, err := q.GetLedgerByHash(ctx, pgtype.Text{String: idempotencyKey, Valid: true}); err == nil {
+		if existing, err := q.GetLedgerByHashForUpdate(ctx, pgtype.Text{String: idempotencyKey, Valid: true}); err == nil {
 			if existing.CampaignID.Valid {
 				campaignID = uuid.UUID(existing.CampaignID.Bytes)
 				return nil
@@ -160,26 +165,18 @@ func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, name
 				"freq_window":      freqWindow,
 				"target_countries": targetCountries,
 			}, map[string]any{"idempotency_key": idempotencyKey})
+			payloadBytes, _ := json.Marshal(CampaignPayload{CampaignID: campaignID.String(), BudgetLimit: budgetLimit.StringFixed(2)})
+			_, err = q.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{EventType: "CREATE_CAMPAIGN", Payload: payloadBytes})
 		}
 		return err
 	})
-	if err != nil {
-		return uuid.Nil, err
-	}
-	rdb := s.getRDB(campaignID)
-	if rdb != nil {
-		rdb.Set(ctx, fmt.Sprintf("budget:campaign:%s", campaignID), budgetLimit.StringFixed(2), 24*time.Hour)
-	} else {
-		return uuid.Nil, fmt.Errorf("target redis shard is unavailable")
-	}
-	s.notifyUpdate(ctx, campaignID)
-	return campaignID, nil
+	return campaignID, err
 }
 
 // CancelCampaign transitions a campaign through a two-stage draining lifecycle to ensure inflight ad impressions complete before final budget reconciliation.
 // Remaining funds are refunded to the customer balance minus a configured cancellation fee.
 func (s *Service) CancelCampaign(ctx context.Context, campaignID uuid.UUID, reason string) error {
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		camp, err := q.GetCampaignFull(ctx, ads.ToUUID(campaignID))
 		if err != nil {
@@ -195,27 +192,29 @@ func (s *Service) CancelCampaign(ctx context.Context, campaignID uuid.UUID, reas
 		if err != nil {
 			return err
 		}
-		return q.CreateStatusHistory(ctx, db.CreateStatusHistoryParams{
+		err = q.CreateStatusHistory(ctx, db.CreateStatusHistoryParams{
 			CampaignID: ads.ToUUID(campaignID),
 			OldStatus:  db.NullCampaignStatusType{CampaignStatusType: camp.Status, Valid: true},
 			NewStatus:  db.CampaignStatusTypeDRAINING,
 			Reason:     pgtype.Text{String: reason, Valid: true},
 		})
-	})
-	if err != nil {
+		if err == nil {
+			payloadBytes, _ := json.Marshal(CampaignPayload{CampaignID: campaignID.String()})
+			_, err = q.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{EventType: "CANCEL_CAMPAIGN", Payload: payloadBytes})
+		}
 		return err
-	}
-	rdb := s.getRDB(campaignID)
-	if rdb != nil {
-		rdb.Del(ctx, fmt.Sprintf("budget:campaign:%s", campaignID))
-	}
-	s.notifyUpdate(ctx, campaignID)
-	time.Sleep(time.Duration(s.cfg.Lifecycle.WaitTimeoutMs) * time.Millisecond)
-	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	})
+}
+
+func (s *Service) FinalizeCancelledCampaign(ctx context.Context, campaignID uuid.UUID, reason string) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		camp, err := q.GetCampaignFull(ctx, ads.ToUUID(campaignID))
 		if err != nil {
 			return err
+		}
+		if camp.Status != db.CampaignStatusTypeDRAINING {
+			return nil
 		}
 		totalBudget := ads.FromNumeric(camp.BudgetLimit)
 		currentSpend := ads.FromNumeric(camp.CurrentSpend)
@@ -272,16 +271,8 @@ func (s *Service) CancelCampaign(ctx context.Context, campaignID uuid.UUID, reas
 		s.AuditLog(ctx, q, uuid.Nil, "CANCEL_CAMPAIGN", "campaign", &campaignID, map[string]any{"reason": reason}, nil)
 		return nil
 	})
-	return err
 }
 
-func (s *Service) notifyUpdate(ctx context.Context, id uuid.UUID) {
-	for _, rdb := range s.rdbs {
-		if rdb != nil {
-			rdb.Publish(ctx, s.cfg.CampaignUpdateChannel, id.String())
-		}
-	}
-}
 
 func (s *Service) getRDB(campaignID uuid.UUID) redis.UniversalClient {
 	if len(s.rdbs) <= 1 {
