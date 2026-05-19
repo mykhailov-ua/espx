@@ -7,6 +7,7 @@ import (
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,15 +25,15 @@ func TestSettingsWatcher(t *testing.T) {
 
 	cfg := &config.Config{
 		RateLimitPerMin:  100,
-		ClickAmount:      0.10,
-		ImpressionAmount: 0.01,
+		ClickAmount:      decimal.NewFromFloat(0.10),
+		ImpressionAmount: decimal.NewFromFloat(0.01),
 	}
 
 	sw := NewSettingsWatcher(rdb, cfg)
 
 	// Initial state
 	assert.Equal(t, 100, sw.Get().RateLimitPerMin)
-	assert.Equal(t, 0.10, sw.Get().ClickAmount)
+	assert.True(t, sw.Get().ClickAmount.Equal(decimal.NewFromFloat(0.10)))
 
 	go sw.Start(ctx, 100*time.Millisecond)
 
@@ -48,7 +49,7 @@ func TestSettingsWatcher(t *testing.T) {
 
 	// Wait for sync
 	assert.Eventually(t, func() bool {
-		return sw.Get().RateLimitPerMin == 200 && sw.Get().ClickAmount == 0.25
+		return sw.Get().RateLimitPerMin == 200 && sw.Get().ClickAmount.Equal(decimal.NewFromFloat(0.25))
 	}, 2*time.Second, 200*time.Millisecond)
 
 	assert.Equal(t, int64(1), sw.Get().Version)

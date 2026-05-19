@@ -4,13 +4,14 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
 //go:embed unified_filter.lua
@@ -26,8 +27,8 @@ type UnifiedFilter struct {
 	rateLimitWindow  time.Duration
 	dupTTL           time.Duration
 	idempotencyTTL   time.Duration
-	clickAmount      float64
-	impressionAmount float64
+	clickAmount      decimal.Decimal
+	impressionAmount decimal.Decimal
 	streamName       string
 	maxStreamLen     int
 }
@@ -41,8 +42,8 @@ func NewUnifiedFilter(
 	rateLimitWindow time.Duration,
 	dupTTL time.Duration,
 	idempotencyTTL time.Duration,
-	clickAmount float64,
-	impressionAmount float64,
+	clickAmount decimal.Decimal,
+	impressionAmount decimal.Decimal,
 	streamName string,
 	maxStreamLen int,
 ) *UnifiedFilter {
@@ -92,40 +93,12 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 
 	rdb := f.getRDB(evt.CampaignID)
 
-	sb := builderPool.Get().(*strings.Builder)
-	defer builderPool.Put(sb)
-
-	sb.Reset()
-	sb.WriteString("rl:ip:")
-	sb.WriteString(evt.IP)
-	rlKey := sb.String()
-
-	sb.Reset()
-	sb.WriteString("dup:")
-	sb.WriteString(evt.Type)
-	sb.WriteByte(':')
-	sb.WriteString(evt.ClickID)
-	dupKey := sb.String()
-
-	sb.Reset()
-	sb.WriteString("budget:campaign:")
-	sb.WriteString(campaignIDStr)
-	budgetSourceKey := sb.String()
-
-	sb.Reset()
-	sb.WriteString("idempotency:click:")
-	sb.WriteString(evt.ClickID)
-	idempotencyKey := sb.String()
-
-	sb.Reset()
-	sb.WriteString("budget:sync:campaign:")
-	sb.WriteString(campaignIDStr)
-	campaignSyncKey := sb.String()
-
-	sb.Reset()
-	sb.WriteString("budget:sync:customer:")
-	sb.WriteString(customerIDStr)
-	customerSyncKey := sb.String()
+	rlKey := "rl:ip:" + evt.IP
+	dupKey := "dup:" + evt.Type + ":" + evt.ClickID
+	budgetSourceKey := "budget:campaign:" + campaignIDStr
+	idempotencyKey := "idempotency:click:" + evt.ClickID
+	campaignSyncKey := "budget:sync:campaign:" + campaignIDStr
+	customerSyncKey := "budget:sync:customer:" + customerIDStr
 
 	dirtyCampaignsKey := "budget:dirty_campaigns"
 	dirtyCustomersKey := "budget:dirty_customers"
@@ -135,21 +108,11 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	currentDate := now.Format("20060102")
 	currentHour := now.Hour() + 1 // 1-24
 
-	sb.Reset()
-	sb.WriteString("budget:daily_spent:campaign:")
-	sb.WriteString(campaignIDStr)
-	sb.WriteByte(':')
-	sb.WriteString(currentDate)
-	dailySpendKey := sb.String()
+	dailySpendKey := "budget:daily_spent:campaign:" + campaignIDStr + ":" + currentDate
 
 	var fcapKey string
 	if evt.UserID != "" {
-		sb.Reset()
-		sb.WriteString("fcap:c:")
-		sb.WriteString(campaignIDStr)
-		sb.WriteString(":u:")
-		sb.WriteString(evt.UserID)
-		fcapKey = sb.String()
+		fcapKey = "fcap:c:" + campaignIDStr + ":u:" + evt.UserID
 	} else {
 		fcapKey = "fcap:ignored"
 	}
@@ -177,7 +140,7 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 			int(f.rateLimitWindow.Seconds()),
 			f.rateLimit,
 			int(f.dupTTL.Seconds()),
-			amount,
+			amount.InexactFloat64(),
 			int(f.idempotencyTTL.Seconds()),
 			campaignIDStr,
 			customerIDStr,
@@ -188,7 +151,7 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 			evt.IP,
 			evt.UA,
 			isEven,
-			campInfo.DailyBudget,
+			campInfo.DailyBudget.InexactFloat64(),
 			currentHour,
 			evt.UserID,
 			campInfo.FreqLimit,
@@ -209,12 +172,12 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 				return fmt.Errorf("failed to load campaign from db: %w", err)
 			}
 
-			remaining := camp.BudgetLimit - camp.CurrentSpend
-			if remaining < 0 {
-				remaining = 0
+			remaining := camp.BudgetLimit.Sub(camp.CurrentSpend)
+			if remaining.IsNegative() {
+				remaining = decimal.Zero
 			}
 
-			rdb.SetNX(ctx, budgetSourceKey, remaining, 24*time.Hour)
+			rdb.SetNX(ctx, budgetSourceKey, remaining.InexactFloat64(), 24*time.Hour)
 			continue
 		}
 
@@ -230,6 +193,7 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 		case 5:
 			return ErrFreqLimitExceeded
 		default:
+			metrics.EventsProcessed.Inc()
 			return nil
 		}
 	}

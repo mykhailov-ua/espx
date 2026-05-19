@@ -9,6 +9,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,7 +51,7 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	err = rdb.Set(ctx, "budget:campaign:"+campaignID.String(), 50.0, 0).Err()
 	require.NoError(t, err)
 
-	filter := ads.NewBudgetFilter(budgetManager, registry, 0.10, 0.01)
+	filter := ads.NewBudgetFilter(budgetManager, registry, decimal.NewFromFloat(0.10), decimal.NewFromFloat(0.01))
 	evt := &domain.Event{
 		ClickID:    uuid.NewString(),
 		CampaignID: campaignID,
@@ -75,10 +76,10 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	campaign, err := campaignRepo.GetByID(ctx, campaignID)
 	require.NoError(t, err, "failed to get campaign from DB")
 	require.NotNil(t, campaign)
-	assert.Equal(t, 0.1, campaign.CurrentSpend)
+	assert.True(t, campaign.CurrentSpend.Equal(decimal.NewFromFloat(0.1)))
 
 	customer, err := customerRepo.GetByID(ctx, customerID)
 	require.NoError(t, err, "failed to get customer from DB")
 	require.NotNil(t, customer)
-	assert.Equal(t, 99.9, customer.Balance)
+	assert.True(t, customer.Balance.Equal(decimal.NewFromFloat(99.9)))
 }

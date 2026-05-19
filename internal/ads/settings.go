@@ -13,15 +13,16 @@ import (
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
 // DynamicConfig represents settings that can be updated at runtime via the Management API.
 type DynamicConfig struct {
-	Version          int64   `json:"version"`
-	RateLimitPerMin  int     `json:"rate_limit_per_min"`
-	RateLimitWindow  int     `json:"rate_limit_window_ms"`
-	ClickAmount      float64 `json:"click_amount"`
-	ImpressionAmount float64 `json:"impression_amount"`
+	Version          int64           `json:"version"`
+	RateLimitPerMin  int             `json:"rate_limit_per_min"`
+	RateLimitWindow  int             `json:"rate_limit_window_ms"`
+	ClickAmount      decimal.Decimal `json:"click_amount"`
+	ImpressionAmount decimal.Decimal `json:"impression_amount"`
 }
 
 // SettingsWatcher periodically checks Redis for configuration updates and performs atomic swaps of the local state.
@@ -101,8 +102,8 @@ func (sw *SettingsWatcher) parseConfig(version int64, data map[string]string) *D
 
 	updateInt(&next.RateLimitPerMin, data["rate_limit_per_min"])
 	updateInt(&next.RateLimitWindow, data["rate_limit_window_ms"])
-	updateFloat(&next.ClickAmount, data["click_amount"])
-	updateFloat(&next.ImpressionAmount, data["impression_amount"])
+	updateDecimal(&next.ClickAmount, data["click_amount"])
+	updateDecimal(&next.ImpressionAmount, data["impression_amount"])
 
 	return &next
 }
@@ -116,11 +117,11 @@ func updateInt(target *int, val string) {
 	}
 }
 
-func updateFloat(target *float64, val string) {
+func updateDecimal(target *decimal.Decimal, val string) {
 	if val == "" {
 		return
 	}
-	if f, err := strconv.ParseFloat(val, 64); err == nil {
-		*target = f
+	if d, err := decimal.NewFromString(val); err == nil {
+		*target = d
 	}
 }

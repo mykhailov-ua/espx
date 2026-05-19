@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type CampaignStatus string
@@ -26,11 +27,11 @@ type Campaign struct {
 	ID              uuid.UUID
 	CustomerID      uuid.UUID
 	Name            string
-	BudgetLimit     float64
-	CurrentSpend    float64
+	BudgetLimit     decimal.Decimal
+	CurrentSpend    decimal.Decimal
 	Status          CampaignStatus
 	PacingMode      PacingMode
-	DailyBudget     float64
+	DailyBudget     decimal.Decimal
 	Timezone        string
 	Location        *time.Location
 	FreqLimit       int32
@@ -41,13 +42,13 @@ type Campaign struct {
 type CampaignRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*Campaign, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status CampaignStatus) error
-	UpdateSpend(ctx context.Context, id uuid.UUID, amount float64) error
+	UpdateSpend(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error
 	ListActive(ctx context.Context) ([]*Campaign, error)
 }
 
 type CampaignRegistry interface {
 	Exists(id uuid.UUID) bool
-	Add(id, customerID uuid.UUID, pacingMode PacingMode, dailyBudget float64, timezone string, freqLimit, freqWindow int32, targetCountries []string)
+	Add(id, customerID uuid.UUID, pacingMode PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string)
 	GetCustomerID(id uuid.UUID) (uuid.UUID, bool)
 	GetCampaign(id uuid.UUID) (*Campaign, bool)
 	Sync(ctx context.Context) (int, error)

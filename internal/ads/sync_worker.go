@@ -6,13 +6,13 @@ import (
 
 import (
 	"context"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
 type SyncWorker struct {
@@ -39,20 +39,22 @@ func NewSyncWorker(
 
 func (w *SyncWorker) Start(ctx context.Context) {
 	w.wg.Add(1)
-	defer w.wg.Done()
+	go func() {
+		defer w.wg.Done()
 
-	ticker := time.NewTicker(w.interval)
-	defer ticker.Stop()
+		ticker := time.NewTicker(w.interval)
+		defer ticker.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			w.SyncAll(context.Background())
-			return
-		case <-ticker.C:
-			w.SyncAll(ctx)
+		for {
+			select {
+			case <-ctx.Done():
+				w.SyncAll(context.Background())
+				return
+			case <-ticker.C:
+				w.SyncAll(ctx)
+			}
 		}
-	}
+	}()
 }
 
 func (w *SyncWorker) Wait(ctx context.Context) error {
@@ -88,12 +90,20 @@ if inflight then total = total + tonumber(inflight) end
 if current then total = total + tonumber(current) end
 
 if total <= 0 then
+    if current and tonumber(current) <= 0.000001 then
+        redis.call("DEL", KEYS[1])
+    end
     return "0"
 end
 
 if current and tonumber(current) > 0 then
-    redis.call("INCRBYFLOAT", KEYS[1], -tonumber(current))
+    local remaining = redis.call("INCRBYFLOAT", KEYS[1], -tonumber(current))
     redis.call("INCRBYFLOAT", KEYS[2], tonumber(current))
+    if tonumber(remaining) <= 0.000001 then
+        redis.call("DEL", KEYS[1])
+    end
+elseif current and tonumber(current) <= 0.000001 then
+    redis.call("DEL", KEYS[1])
 end
 
 redis.call("SET", KEYS[3], "1", "EX", ARGV[1])
@@ -110,7 +120,7 @@ redis.call("DEL", KEYS[3])
 return remaining
 `
 
-func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string, updateFn func(context.Context, uuid.UUID, float64) error) {
+func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string, updateFn func(context.Context, uuid.UUID, decimal.Decimal) error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return
@@ -129,13 +139,13 @@ func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string
 		return
 	}
 
-	amount, _ := strconv.ParseFloat(amountStr.(string), 64)
-	if amount <= 0 {
+	amount, err := decimal.NewFromString(amountStr.(string))
+	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
 		return
 	}
 
 	if err := updateFn(ctx, id, amount); err == nil {
-		w.rdb.Eval(ctx, commitSyncScript, []string{inFlightKey, dirtySet, lockKey}, amount, idStr)
+		w.rdb.Eval(ctx, commitSyncScript, []string{inFlightKey, dirtySet, lockKey}, amount.InexactFloat64(), idStr)
 	} else {
 		w.rdb.Del(ctx, lockKey)
 	}

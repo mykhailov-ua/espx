@@ -46,10 +46,6 @@ func (r *CampaignRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Campa
 		return nil, err
 	}
 
-	limit, _ := row.BudgetLimit.Float64Value()
-	spend, _ := row.CurrentSpend.Float64Value()
-	daily, _ := row.DailyBudget.Float64Value()
-
 	loc, _ := time.LoadLocation(row.Timezone)
 	if loc == nil {
 		loc = time.UTC
@@ -58,11 +54,11 @@ func (r *CampaignRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Campa
 	return &domain.Campaign{
 		ID:              id,
 		CustomerID:      uuid.UUID(row.CustomerID.Bytes),
-		BudgetLimit:     limit.Float64,
-		CurrentSpend:    spend.Float64,
+		BudgetLimit:     FromNumeric(row.BudgetLimit),
+		CurrentSpend:    FromNumeric(row.CurrentSpend),
 		Status:          domain.CampaignStatus(row.Status),
 		PacingMode:      domain.PacingMode(row.PacingMode),
-		DailyBudget:     daily.Float64,
+		DailyBudget:     FromNumeric(row.DailyBudget),
 		Timezone:        row.Timezone,
 		Location:        loc,
 		FreqLimit:       row.FreqLimit.Int32,
@@ -79,14 +75,10 @@ func (r *CampaignRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status do
 	return err
 }
 
-func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount float64) error {
-	num := pgtype.Numeric{}
-	if err := num.Scan(fmt.Sprintf("%.2f", amount)); err != nil {
-		return err
-	}
+func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
 	return r.queries.UpdateCampaignSpend(ctx, db.UpdateCampaignSpendParams{
 		ID:           pgtype.UUID{Bytes: id, Valid: true},
-		CurrentSpend: num,
+		CurrentSpend: ToNumeric(amount),
 	})
 }
 
@@ -98,10 +90,6 @@ func (r *CampaignRepo) ListActive(ctx context.Context) ([]*domain.Campaign, erro
 
 	campaigns := make([]*domain.Campaign, len(rows))
 	for i, row := range rows {
-		limit, _ := row.BudgetLimit.Float64Value()
-		spend, _ := row.CurrentSpend.Float64Value()
-		daily, _ := row.DailyBudget.Float64Value()
-
 		loc, _ := time.LoadLocation(row.Timezone)
 		if loc == nil {
 			loc = time.UTC
@@ -111,11 +99,11 @@ func (r *CampaignRepo) ListActive(ctx context.Context) ([]*domain.Campaign, erro
 			ID:              uuid.UUID(row.ID.Bytes),
 			CustomerID:      uuid.UUID(row.CustomerID.Bytes),
 			Name:            row.Name,
-			BudgetLimit:     limit.Float64,
-			CurrentSpend:    spend.Float64,
+			BudgetLimit:     FromNumeric(row.BudgetLimit),
+			CurrentSpend:    FromNumeric(row.CurrentSpend),
 			Status:          domain.CampaignStatus(row.Status),
 			PacingMode:      domain.PacingMode(row.PacingMode),
-			DailyBudget:     daily.Float64,
+			DailyBudget:     FromNumeric(row.DailyBudget),
 			Timezone:        row.Timezone,
 			Location:        loc,
 			FreqLimit:       row.FreqLimit.Int32,
@@ -140,23 +128,17 @@ func (r *CustomerRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Custo
 		return nil, err
 	}
 
-	balance, _ := row.Balance.Float64Value()
-
 	return &domain.Customer{
 		ID:       id,
 		Name:     row.Name,
-		Balance:  balance.Float64,
+		Balance:  FromNumeric(row.Balance),
 		Currency: row.Currency,
 	}, nil
 }
 
-func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount float64) error {
-	num := pgtype.Numeric{}
-	if err := num.Scan(fmt.Sprintf("%.2f", amount)); err != nil {
-		return err
-	}
+func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
 	return r.queries.UpdateCustomerBalance(ctx, db.UpdateCustomerBalanceParams{
 		ID:      pgtype.UUID{Bytes: id, Valid: true},
-		Balance: num,
+		Balance: ToNumeric(amount),
 	})
 }

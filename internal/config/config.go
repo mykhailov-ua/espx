@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
 
 type Secret string
@@ -32,8 +34,8 @@ type Config struct {
 	TrustedProxies          []string
 	TokenSymmetricKey       Secret
 	MaxRequestBodySize      int64
-	ClickAmount             float64
-	ImpressionAmount        float64
+	ClickAmount             decimal.Decimal
+	ImpressionAmount        decimal.Decimal
 	EventBatchSize          int
 	EventFlushMs            int
 	StatsFlushMs            int
@@ -101,6 +103,15 @@ func getEnvFloat(key string, fallback float64) float64 {
 	return fallback
 }
 
+func getEnvDecimal(key string, fallback decimal.Decimal) decimal.Decimal {
+	if value, ok := os.LookupEnv(key); ok {
+		if decVal, err := decimal.NewFromString(value); err == nil {
+			return decVal
+		}
+	}
+	return fallback
+}
+
 func getEnvInt64(key string, fallback int64) int64 {
 	if value, ok := os.LookupEnv(key); ok {
 		if intVal, err := strconv.ParseInt(value, 10, 64); err == nil {
@@ -151,8 +162,8 @@ func Load() (*Config, error) {
 		HttpWriteTimeoutMs:      getEnvInt("HTTP_WRITE_TIMEOUT_MS", 10000),
 		HttpIdleTimeoutMs:       getEnvInt("HTTP_IDLE_TIMEOUT_MS", 30000),
 		DefaultTokenDurationHrs: getEnvInt("DEFAULT_TOKEN_DURATION_HRS", 24),
-		ClickAmount:             getEnvFloat("CLICK_AMOUNT", 0.10),
-		ImpressionAmount:        getEnvFloat("IMPRESSION_AMOUNT", 0.01),
+		ClickAmount:             getEnvDecimal("CLICK_AMOUNT", decimal.NewFromFloat(0.10)),
+		ImpressionAmount:        getEnvDecimal("IMPRESSION_AMOUNT", decimal.NewFromFloat(0.01)),
 		StreamMaxLen:            getEnvInt("STREAM_MAX_LEN", 100000),
 		RetryInitialWaitMs:      getEnvInt("RETRY_INITIAL_WAIT_MS", 100),
 		RetryMaxWaitMs:          getEnvInt("RETRY_MAX_WAIT_MS", 5000),

@@ -16,6 +16,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,8 +74,8 @@ func TestE2EFlow(t *testing.T) {
 		time.Minute,
 		45*time.Second,
 		24*time.Hour,
-		0.1,
-		0.01,
+		decimal.NewFromFloat(0.1),
+		decimal.NewFromFloat(0.01),
 		"test-stream",
 		100000,
 	)
@@ -158,8 +159,8 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 		time.Minute,
 		45*time.Second,
 		24*time.Hour,
-		0.1,
-		0.01,
+		decimal.NewFromFloat(0.1),
+		decimal.NewFromFloat(0.01),
 		"test-proto-stream",
 		100000,
 	)

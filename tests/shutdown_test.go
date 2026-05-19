@@ -17,6 +17,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -69,8 +70,8 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 		time.Minute,
 		45*time.Second,
 		24*time.Hour,
-		0.1,
-		0.01,
+		decimal.NewFromFloat(0.1),
+		decimal.NewFromFloat(0.01),
 		"shutdown-stream",
 		100000,
 	)
