@@ -12,7 +12,9 @@ import (
 // GenerateSecureToken generates unpredictable session secrets using hardware-backed cryptographic entropy. This prevents session guessing and token forgery attacks across distributed gateways.
 func GenerateSecureToken(length int) string {
 	b := make([]byte, length)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("cryptographic entropy source failure: " + err.Error())
+	}
 	return hex.EncodeToString(b)
 }
 

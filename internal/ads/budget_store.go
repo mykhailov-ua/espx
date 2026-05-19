@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
 const budgetLuaScript = `
@@ -55,12 +56,12 @@ func NewRedisBudgetManager(rdb redis.Cmdable, repo domain.CampaignRepository, id
 	}
 }
 
-func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, campaignID uuid.UUID, clickID string, amount float64) (bool, error) {
-	campaignKey := fmt.Sprintf("budget:campaign:%s", campaignID)
-	idempotencyKey := fmt.Sprintf("idempotency:click:%s", clickID)
+func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, campaignID uuid.UUID, clickID string, amount decimal.Decimal) (bool, error) {
+	campaignKey := "budget:campaign:" + campaignID.String()
+	idempotencyKey := "idempotency:click:" + clickID
 
 	res, err := m.rdb.Eval(ctx, budgetLuaScript, []string{campaignKey, idempotencyKey},
-		amount,
+		amount.InexactFloat64(),
 		int(m.idempotencyTTL.Seconds()),
 		campaignID.String(),
 		customerID.String(),
@@ -75,12 +76,12 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 			return false, fmt.Errorf("failed to load campaign from db on cache miss: %w", err)
 		}
 
-		remaining := camp.BudgetLimit - camp.CurrentSpend
-		if remaining < 0 {
-			remaining = 0
+		remaining := camp.BudgetLimit.Sub(camp.CurrentSpend)
+		if remaining.IsNegative() {
+			remaining = decimal.Zero
 		}
 
-		m.rdb.SetNX(ctx, campaignKey, remaining, 24*time.Hour)
+		m.rdb.SetNX(ctx, campaignKey, remaining.InexactFloat64(), 24*time.Hour)
 
 		return m.CheckAndSpend(ctx, customerID, campaignID, clickID, amount)
 	}

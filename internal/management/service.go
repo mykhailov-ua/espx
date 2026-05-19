@@ -6,8 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
+	"sync"
 	"time"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,20 +26,40 @@ type Service struct {
 	rdbs    []redis.UniversalClient
 	sharder ads.Sharder
 	cfg     *config.Config
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 }
 
 func NewService(pool *pgxpool.Pool, rdbs []redis.UniversalClient, sharder ads.Sharder, cfg *config.Config) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		pool:    pool,
 		rdbs:    rdbs,
 		sharder: sharder,
 		cfg:     cfg,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
+	s.wg.Add(2)
 	w := NewOutboxWorker(s)
-	go w.Start(context.Background(), 20*time.Millisecond)
+	go func() {
+		defer s.wg.Done()
+		w.Start(ctx, 20*time.Millisecond)
+	}()
 	dw := NewCampaignDrainWorker(s)
-	go dw.Start(context.Background(), 20*time.Millisecond)
+	go func() {
+		defer s.wg.Done()
+		dw.Start(ctx, 20*time.Millisecond)
+	}()
 	return s
+}
+
+func (s *Service) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.wg.Wait()
 }
 
 func (s *Service) GetCampaign(ctx context.Context, id uuid.UUID) (db.Campaign, error) {

@@ -89,10 +89,12 @@ func (s *PostgresStore) StoreBatch(ctx context.Context, events []*domain.Event) 
 		}
 
 		if i < MaxRetries {
+			timer := time.NewTimer(waitTime)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return ctx.Err()
-			case <-time.After(waitTime):
+			case <-timer.C:
 				waitTime *= 2
 				if waitTime > MaxWait {
 					waitTime = MaxWait

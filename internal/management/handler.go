@@ -15,7 +15,6 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// Handler routes administrative and customer management API endpoints. Encapsulating rate limiting, RBAC validation middleware, and service delegation in a single multiplexer handler ensures consistent boundary enforcement.
 type Handler struct {
 	svc            *Service
 	cfg            *config.Config
@@ -38,23 +37,19 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/campaigns", h.limit(h.auth(h.createCampaign, "SA", "M", "C")))
 	mux.HandleFunc("DELETE /admin/campaigns/{id}", h.limit(h.auth(h.cancelCampaign, "SA", "M", "C")))
 
-	// New routes
 	mux.HandleFunc("POST /admin/settings", h.limit(h.auth(h.updateSettings, "SA")))
 	mux.HandleFunc("POST /admin/blacklist", h.limit(h.auth(h.blockIP, "SA")))
 	mux.HandleFunc("DELETE /admin/blacklist", h.limit(h.auth(h.unblockIP, "SA")))
 	mux.HandleFunc("GET /admin/audit", h.limit(h.auth(h.listAudit, "SA", "M")))
 
-	// Customer GET routes
 	mux.HandleFunc("GET /admin/customers", h.limit(h.auth(h.listCustomers, "SA", "M")))
 	mux.HandleFunc("GET /admin/customers/{id}", h.limit(h.auth(h.getCustomer, "SA", "M", "C")))
 	mux.HandleFunc("GET /admin/customers/{id}/ledger", h.limit(h.auth(h.getCustomerLedger, "SA", "M", "C")))
 
-	// Campaign GET routes
 	mux.HandleFunc("GET /admin/campaigns", h.limit(h.auth(h.listCampaigns, "SA", "M", "C")))
 	mux.HandleFunc("GET /admin/campaigns/{id}", h.limit(h.auth(h.getCampaign, "SA", "M", "C")))
 	mux.HandleFunc("GET /admin/campaigns/{id}/history", h.limit(h.auth(h.getCampaignHistory, "SA", "M", "C")))
 
-	// System GET routes
 	mux.HandleFunc("GET /admin/blacklist", h.limit(h.auth(h.listBlacklist, "SA")))
 	mux.HandleFunc("GET /admin/settings", h.limit(h.auth(h.getSettings, "SA")))
 }
@@ -95,7 +90,12 @@ func (h *Handler) createCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.ID == uuid.Nil {
-		req.ID, _ = uuid.NewV7()
+		var err error
+		req.ID, err = uuid.NewV7()
+		if err != nil {
+			httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to generate secure customer id")
+			return
+		}
 	}
 	if err := h.svc.CreateCustomer(r.Context(), req.ID, req.Name, req.Balance, req.Currency); err != nil {
 		slog.Error("failed to create customer", "error", err)
@@ -115,7 +115,11 @@ func (h *Handler) topUpBalance(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Amount decimal.Decimal `json:"amount"`
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "failed to read request body")
+		return
+	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
@@ -141,7 +145,11 @@ func (h *Handler) createCampaign(w http.ResponseWriter, r *http.Request) {
 		FreqWindow      int32           `json:"freq_window"`
 		TargetCountries []string        `json:"target_countries"`
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "failed to read request body")
+		return
+	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		httpresponse.Error(w, http.StatusBadRequest, "BAD_REQUEST", "invalid request body")
 		return
@@ -157,7 +165,6 @@ func (h *Handler) createCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Defaults
 	pacing := db.PacingModeTypeASAP
 	if req.PacingMode == "EVEN" {
 		pacing = db.PacingModeTypeEVEN
@@ -189,7 +196,9 @@ func (h *Handler) cancelCampaign(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Reason string `json:"reason"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Warn("failed to decode cancel campaign request", "error", err)
+	}
 
 	u, ok := GetUser(r.Context())
 	if ok && u.Role == "C" {

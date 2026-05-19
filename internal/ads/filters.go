@@ -3,21 +3,15 @@ package ads
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
-var builderPool = sync.Pool{
-	New: func() any {
-		return &strings.Builder{}
-	},
-}
+
 
 var (
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
@@ -52,19 +46,20 @@ func (f *FraudFilter) Check(ctx context.Context, evt *domain.Event) error {
 	}
 
 	if evt.Type == "impression" {
-		// Store impression timestamp for future click verification
-		key := fmt.Sprintf("imp_ts:%s:%s", evt.UserID, evt.CampaignID)
-		f.rdb.Set(ctx, key, time.Now().UnixMilli(), 10*time.Minute)
+		key := "imp_ts:" + evt.UserID + ":" + evt.CampaignID.String()
+		if err := f.rdb.Set(ctx, key, time.Now().UnixMilli(), 10*time.Minute).Err(); err != nil {
+			slog.Error("failed to store impression timestamp in redis", "error", err, "user_id", evt.UserID, "campaign_id", evt.CampaignID)
+		}
 		return nil
 	}
 
 	if evt.Type == "click" {
-		key := fmt.Sprintf("imp_ts:%s:%s", evt.UserID, evt.CampaignID)
+		key := "imp_ts:" + evt.UserID + ":" + evt.CampaignID.String()
 		ts, err := f.rdb.Get(ctx, key).Int64()
 		if err == nil {
 			delta := time.Since(time.UnixMilli(ts))
 			if delta < f.ttcMin {
-				evt.FraudReason = fmt.Sprintf("low_ttc:%v", delta)
+				evt.FraudReason = "low_ttc:" + delta.String()
 			}
 		}
 	}
@@ -90,7 +85,6 @@ func (f *GeoFilter) Check(ctx context.Context, evt *domain.Event) error {
 		return ErrCampaignNotFound
 	}
 
-	// Skip if no targeting configured
 	if len(camp.TargetCountries) == 0 {
 		return nil
 	}
@@ -98,7 +92,7 @@ func (f *GeoFilter) Check(ctx context.Context, evt *domain.Event) error {
 	country, err := f.geo.GetCountry(evt.IP)
 	if err != nil {
 		slog.Warn("geo lookup failed", "ip", evt.IP, "error", err)
-		// Fallback to allow on lookup failure to prevent ingestion halt
+		// Fail-open strategy prevents geo-provider outages from halting ingestion.
 		return nil
 	}
 
@@ -114,11 +108,11 @@ func (f *GeoFilter) Check(ctx context.Context, evt *domain.Event) error {
 type BudgetFilter struct {
 	manager          domain.BudgetManager
 	registry         domain.CampaignRegistry
-	clickAmount      float64
-	impressionAmount float64
+	clickAmount      decimal.Decimal
+	impressionAmount decimal.Decimal
 }
 
-func NewBudgetFilter(manager domain.BudgetManager, registry domain.CampaignRegistry, clickAmount, impressionAmount float64) *BudgetFilter {
+func NewBudgetFilter(manager domain.BudgetManager, registry domain.CampaignRegistry, clickAmount, impressionAmount decimal.Decimal) *BudgetFilter {
 	return &BudgetFilter{
 		manager:          manager,
 		registry:         registry,
@@ -200,14 +194,7 @@ func (l *IPRateLimiter) Check(ctx context.Context, evt *domain.Event) error {
 		return nil
 	}
 
-	sb := builderPool.Get().(*strings.Builder)
-	sb.Reset()
-	sb.Grow(13 + len(evt.IP))
-	sb.WriteString("ratelimit:ip:")
-	sb.WriteString(evt.IP)
-	key := sb.String()
-	builderPool.Put(sb)
-
+	key := "ratelimit:ip:" + evt.IP
 	windowMs := int64(l.window.Milliseconds())
 
 	res, err := l.rdb.Eval(ctx, rateLimitScript, []string{key}, windowMs, l.limit).Result()
@@ -240,15 +227,7 @@ func (f *DuplicateEventFilter) Check(ctx context.Context, evt *domain.Event) err
 		return nil
 	}
 
-	sb := builderPool.Get().(*strings.Builder)
-	sb.Reset()
-	sb.Grow(5 + len(evt.Type) + len(evt.ClickID))
-	sb.WriteString("dup:")
-	sb.WriteString(evt.Type)
-	sb.WriteByte(':')
-	sb.WriteString(evt.ClickID)
-	key := sb.String()
-	builderPool.Put(sb)
+	key := "dup:" + evt.Type + ":" + evt.ClickID
 
 	ok, err := f.rdb.SetNX(ctx, key, "1", f.ttl).Result()
 	if err != nil {

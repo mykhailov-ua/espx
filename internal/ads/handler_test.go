@@ -15,13 +15,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	"github.com/shopspring/decimal"
 	"google.golang.org/protobuf/proto"
 )
 
 type mockRegistry struct{}
 
 func (m *mockRegistry) Exists(id uuid.UUID) bool { return true }
-func (m *mockRegistry) Add(id, customerID uuid.UUID, pacingMode domain.PacingMode, dailyBudget float64, timezone string, freqLimit, freqWindow int32, targetCountries []string) {
+func (m *mockRegistry) Add(id, customerID uuid.UUID, pacingMode domain.PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string) {
 }
 func (m *mockRegistry) GetCustomerID(id uuid.UUID) (uuid.UUID, bool) { return uuid.Nil, true }
 func (m *mockRegistry) GetCampaign(id uuid.UUID) (*domain.Campaign, bool) {

@@ -92,8 +92,8 @@ func TestStreamConsumer_CircuitBreakerStopsReads(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	callsAfterWait := failStore.calls.Load()
 
-	// Allow at most 2 extra calls (the HalfOpen probe).
-	assert.LessOrEqual(t, callsAfterWait-callsAtOpen, int64(2),
+	// Allow at most 4 extra calls (the HalfOpen probe + batch decomposition calls).
+	assert.LessOrEqual(t, callsAfterWait-callsAtOpen, int64(4),
 		"CB should prevent flush calls while open, got %d extra calls", callsAfterWait-callsAtOpen)
 
 	// Heal the store and verify recovery.

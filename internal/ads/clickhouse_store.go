@@ -48,10 +48,12 @@ func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []*domain.Event
 		}
 
 		if i < MaxRetries {
+			timer := time.NewTimer(waitTime)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return ctx.Err()
-			case <-time.After(waitTime):
+			case <-timer.C:
 				waitTime *= 2
 				if waitTime > MaxWait {
 					waitTime = MaxWait
@@ -77,10 +79,18 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 		*pClicks = (*pClicks)[:0]
 		*pConvs = (*pConvs)[:0]
 		*pFraud = (*pFraud)[:0]
-		slicePool.Put(pImps)
-		slicePool.Put(pClicks)
-		slicePool.Put(pConvs)
-		slicePool.Put(pFraud)
+		if cap(*pImps) <= 5000 {
+			slicePool.Put(pImps)
+		}
+		if cap(*pClicks) <= 5000 {
+			slicePool.Put(pClicks)
+		}
+		if cap(*pConvs) <= 5000 {
+			slicePool.Put(pConvs)
+		}
+		if cap(*pFraud) <= 5000 {
+			slicePool.Put(pFraud)
+		}
 	}()
 
 	imps := *pImps

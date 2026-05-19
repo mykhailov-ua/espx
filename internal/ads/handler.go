@@ -104,7 +104,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		w.Write([]byte("OK"))
 	})
 
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -177,7 +177,11 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 					clickID = pbReq.Metadata.ClickId
 				}
 				if pbReq.Metadata.Extra != nil {
-					payload, _ = json.Marshal(pbReq.Metadata.Extra)
+					var err error
+					payload, err = json.Marshal(pbReq.Metadata.Extra)
+					if err != nil {
+						slog.Warn("failed to marshal extra metadata", "error", err, "request_id", id)
+					}
 				}
 			}
 		} else {
@@ -225,33 +229,38 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 
 		if filterEngine != nil {
 			if err := filterEngine.Check(r.Context(), evt); err != nil {
-				domain.EventPool.Put(evt)
 				if errors.Is(err, ErrRateLimitExceeded) {
+					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: rate limit", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("rate_limit").Inc()
 					http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 					return
 				} else if errors.Is(err, ErrDuplicateEvent) {
+					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: duplicate", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("duplicate").Inc()
 					http.Error(w, "duplicate event", http.StatusConflict)
 					return
 				} else if errors.Is(err, ErrBudgetExhausted) {
+					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: budget exhausted", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("budget").Inc()
 					http.Error(w, "budget exhausted", http.StatusPaymentRequired)
 					return
 				} else if errors.Is(err, ErrPacingExhausted) {
+					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: pacing exhausted", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("pacing").Inc()
 					http.Error(w, "pacing limit reached", http.StatusTooManyRequests)
 					return
 				} else if errors.Is(err, ErrFreqLimitExceeded) {
+					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: frequency limit", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("freq").Inc()
 					http.Error(w, "frequency limit reached", http.StatusForbidden)
 					return
 				} else if errors.Is(err, ErrGeoBlocked) {
+					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: geo blocked", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("geo").Inc()
 					http.Error(w, "geo-targeting blocked", http.StatusForbidden)
@@ -263,7 +272,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 					shard := sharder.GetShard(evt.CampaignID)
 					rdb := rdbs[shard]
 
-					_, _ = rdb.XAdd(r.Context(), &redis.XAddArgs{
+					if err := rdb.XAdd(r.Context(), &redis.XAddArgs{
 						Stream: fraudStream,
 						MaxLen: int64(cfg.StreamMaxLen),
 						Approx: true,
@@ -278,10 +287,13 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 							"fraud_reason": evt.FraudReason,
 							"created_at":   evt.CreatedAt.Format(time.RFC3339Nano),
 						},
-					}).Result()
+					}).Err(); err != nil {
+						slog.Error("failed to write to fraud stream", "error", err, "request_id", id)
+					}
 
 					// Silent drop
 				} else {
+					domain.EventPool.Put(evt)
 					slog.Error("filter engine failure", "error", err, "request_id", id)
 					http.Error(w, "internal error", http.StatusInternalServerError)
 					return
@@ -301,10 +313,15 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 			buf := bufferPool.Get().(*bytes.Buffer)
 			defer putBuffer(buf)
 
-			out, _ := proto.MarshalOptions{}.MarshalAppend(buf.Bytes(), resp)
+			out, err := proto.MarshalOptions{}.MarshalAppend(buf.Bytes(), resp)
+			if err != nil {
+				slog.Error("failed to marshal proto response", "error", err, "request_id", id)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
 			w.Header().Set("Content-Type", "application/x-protobuf")
 			w.WriteHeader(status)
-			_, _ = w.Write(out)
+			w.Write(out)
 		} else {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
@@ -312,10 +329,10 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 			buf := bufferPool.Get().(*bytes.Buffer)
 			defer putBuffer(buf)
 
-			_, _ = buf.WriteString(`{"request_id":"`)
-			_, _ = buf.WriteString(requestID)
-			_, _ = buf.WriteString(`","status":"accepted"}`)
-			_, _ = w.Write(buf.Bytes())
+			buf.WriteString(`{"request_id":"`)
+			buf.WriteString(requestID)
+			buf.WriteString(`","status":"accepted"}`)
+			w.Write(buf.Bytes())
 		}
 	})
 

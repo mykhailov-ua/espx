@@ -10,13 +10,14 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
 )
 
 type campaignInfo struct {
 	customerID      uuid.UUID
 	status          db.CampaignStatusType
 	pacingMode      domain.PacingMode
-	dailyBudget     float64
+	dailyBudget     decimal.Decimal
 	timezone        string
 	location        *time.Location
 	freqLimit       int32
@@ -84,7 +85,7 @@ func (r *Registry) GetCampaign(id uuid.UUID) (*domain.Campaign, bool) {
 	}, true
 }
 
-func (r *Registry) Add(id, customerID uuid.UUID, pacingMode domain.PacingMode, dailyBudget float64, timezone string, freqLimit, freqWindow int32, targetCountries []string) {
+func (r *Registry) Add(id, customerID uuid.UUID, pacingMode domain.PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string) {
 	loc, err := time.LoadLocation(timezone)
 	if err != nil {
 		slog.Error("invalid timezone in registry Add", "timezone", timezone, "error", err)
@@ -134,7 +135,7 @@ func (r *Registry) Sync(ctx context.Context) (int, error) {
 			customerID:      uuid.UUID(row.CustomerID.Bytes),
 			status:          row.Status,
 			pacingMode:      domain.PacingMode(row.PacingMode),
-			dailyBudget:     FromNumeric(row.DailyBudget).InexactFloat64(),
+			dailyBudget:     FromNumeric(row.DailyBudget),
 			timezone:        row.Timezone,
 			location:        loc,
 			freqLimit:       row.FreqLimit.Int32,
@@ -187,19 +188,47 @@ func (r *Registry) StartWatch(ctx context.Context, rdb redis.UniversalClient, ch
 		pubsub := rdb.Subscribe(ctx, channel)
 		defer pubsub.Close()
 
-		ch := pubsub.Channel()
+		ch := pubsub.Channel(redis.WithChannelSize(1000))
+		syncTrigger := make(chan struct{}, 1)
+
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-syncTrigger:
+					count, err := r.Sync(ctx)
+					if err != nil {
+						slog.Error("live campaign registry sync failed", "error", err)
+					} else {
+						slog.Debug("live campaign registry synced via trigger", "campaigns", count)
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case msg := <-ch:
+			case msg, ok := <-ch:
+				if !ok {
+					slog.Error("redis pubsub channel closed permanently")
+					return
+				}
 				id, err := uuid.Parse(msg.Payload)
 				if err != nil {
 					slog.Warn("received invalid campaign id in pubsub", "payload", msg.Payload)
 					continue
 				}
-				_, _ = r.Sync(ctx)
-				slog.Debug("registry synced via pubsub", "campaign_id", id)
+				select {
+				case syncTrigger <- struct{}{}:
+				default:
+				}
+				slog.Debug("registry sync triggered via pubsub", "campaign_id", id)
 			}
 		}
 	}()

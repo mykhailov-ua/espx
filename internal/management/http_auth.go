@@ -126,9 +126,11 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("refreshToken")
 	if err == nil && cookie.Value != "" {
-		_, _ = h.authClient.RevokeToken(r.Context(), &pb.RevokeTokenRequest{
+		if _, errRevoke := h.authClient.RevokeToken(r.Context(), &pb.RevokeTokenRequest{
 			RefreshToken: cookie.Value,
-		})
+		}); errRevoke != nil {
+			slog.Warn("failed to revoke token on logout", "error", errRevoke)
+		}
 	}
 
 	accessCookie, err := r.Cookie("accessToken")
@@ -139,7 +141,9 @@ func (h *AuthHandler) logout(w http.ResponseWriter, r *http.Request) {
 			ttl := time.Until(payload.ExpiredAt)
 			pipe.Set(r.Context(), "revoked:token:"+payload.ID.String(), "true", ttl)
 			pipe.Set(r.Context(), "revoked:session:"+payload.SessionID.String(), "true", ttl)
-			_, _ = pipe.Exec(r.Context())
+			if _, errExec := pipe.Exec(r.Context()); errExec != nil {
+				slog.Error("failed to execute pipeline during logout token revocation", "error", errExec)
+			}
 		}
 	}
 

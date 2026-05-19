@@ -90,7 +90,6 @@ func main() {
 	authMiddleware := management.NewAuthMiddleware(tokenMaker, rdbs[0], cfg)
 
 	svc := management.NewService(pool, rdbs, sharder, cfg)
-
 	var bgWg sync.WaitGroup
 	bgWg.Add(1)
 	go func() {
@@ -151,6 +150,8 @@ func main() {
 	case <-shutdownCtx.Done():
 		slog.Warn("background workers shutdown timed out")
 	}
+
+	svc.Close()
 
 	for i, rdb := range rdbs {
 		if err := rdb.Close(); err != nil {

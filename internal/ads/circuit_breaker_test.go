@@ -14,44 +14,44 @@ func TestCircuitBreaker_StartsInClosedState(t *testing.T) {
 
 	assert.Equal(t, CircuitClosed, cb.State())
 	assert.True(t, cb.Allow())
-	assert.Equal(t, 0, cb.Failures())
+	assert.Equal(t, 0, cb.Failures("test"))
 }
 
 func TestCircuitBreaker_TripsAfterThreshold(t *testing.T) {
 	cb := NewCircuitBreaker(3, 1*time.Second)
 
-	cb.RecordFailure()
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitClosed, cb.State())
 	assert.True(t, cb.Allow())
 
-	cb.RecordFailure()
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitClosed, cb.State())
 	assert.True(t, cb.Allow())
 
-	cb.RecordFailure()
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 	assert.False(t, cb.Allow())
-	assert.Equal(t, 3, cb.Failures())
+	assert.Equal(t, 3, cb.Failures("test"))
 }
 
 func TestCircuitBreaker_SuccessResetsFailures(t *testing.T) {
 	cb := NewCircuitBreaker(3, 1*time.Second)
 
-	cb.RecordFailure()
-	cb.RecordFailure()
-	assert.Equal(t, 2, cb.Failures())
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
+	assert.Equal(t, 2, cb.Failures("test"))
 
-	cb.RecordSuccess()
+	cb.RecordSuccess("test")
 	assert.Equal(t, CircuitClosed, cb.State())
-	assert.Equal(t, 0, cb.Failures())
+	assert.Equal(t, 0, cb.Failures("test"))
 	assert.True(t, cb.Allow())
 }
 
 func TestCircuitBreaker_TransitionsToHalfOpen(t *testing.T) {
 	cb := NewCircuitBreaker(2, 50*time.Millisecond)
 
-	cb.RecordFailure()
-	cb.RecordFailure()
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 	assert.False(t, cb.Allow())
 
@@ -64,14 +64,14 @@ func TestCircuitBreaker_TransitionsToHalfOpen(t *testing.T) {
 func TestCircuitBreaker_HalfOpenSuccessCloses(t *testing.T) {
 	cb := NewCircuitBreaker(2, 50*time.Millisecond)
 
-	cb.RecordFailure()
-	cb.RecordFailure()
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 
 	time.Sleep(60 * time.Millisecond)
 
 	require.True(t, cb.Allow())
-	cb.RecordSuccess()
+	cb.RecordSuccess("test")
 	assert.Equal(t, CircuitClosed, cb.State())
 	assert.True(t, cb.Allow())
 }
@@ -79,14 +79,14 @@ func TestCircuitBreaker_HalfOpenSuccessCloses(t *testing.T) {
 func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 	cb := NewCircuitBreaker(2, 50*time.Millisecond)
 
-	cb.RecordFailure()
-	cb.RecordFailure()
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 
 	time.Sleep(60 * time.Millisecond)
 
 	require.True(t, cb.Allow())
-	cb.RecordFailure()
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 	assert.False(t, cb.Allow())
 }
@@ -94,7 +94,7 @@ func TestCircuitBreaker_HalfOpenFailureReopens(t *testing.T) {
 func TestCircuitBreaker_HalfOpenBlocksConcurrentProbes(t *testing.T) {
 	cb := NewCircuitBreaker(1, 50*time.Millisecond)
 
-	cb.RecordFailure()
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 
 	time.Sleep(60 * time.Millisecond)
@@ -114,7 +114,7 @@ func TestCircuitBreaker_WaitDuration(t *testing.T) {
 
 	assert.Equal(t, time.Duration(0), cb.WaitDuration())
 
-	cb.RecordFailure()
+	cb.RecordFailure("test")
 	assert.Equal(t, CircuitOpen, cb.State())
 
 	d := cb.WaitDuration()
@@ -138,7 +138,7 @@ func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			cb.Allow()
-			cb.RecordFailure()
+			cb.RecordFailure("test")
 			cb.Allow()
 		}()
 	}
@@ -159,9 +159,9 @@ func TestCircuitBreaker_ConcurrentMixedOps(t *testing.T) {
 			defer wg.Done()
 			cb.Allow()
 			if idx%3 == 0 {
-				cb.RecordSuccess()
+				cb.RecordSuccess("test")
 			} else {
-				cb.RecordFailure()
+				cb.RecordFailure("test")
 			}
 		}(i)
 	}

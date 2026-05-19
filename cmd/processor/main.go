@@ -88,7 +88,7 @@ func main() {
 
 		sw := ads.NewSyncWorker(rdb, campaignRepo, customerRepo, time.Duration(cfg.BudgetSyncIntervalMs)*time.Millisecond)
 		syncWorkers = append(syncWorkers, sw)
-		go sw.Start(ctx)
+		sw.Start(ctx)
 
 		pc := ads.NewStreamConsumer(
 			pgStore,
@@ -182,7 +182,7 @@ func main() {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
+		w.Write([]byte("OK"))
 	})
 
 	server := &http.Server{

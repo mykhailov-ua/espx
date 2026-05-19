@@ -221,17 +221,39 @@ func (p *StreamConsumer) worker(ctx context.Context, workerIdx int) {
 
 func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, msgIDs *[]string, retryCount *int, workerID string, ticker *time.Ticker, retryWait *time.Duration) {
 	if !p.cb.Allow() {
+		*retryCount++
+		if *retryCount > p.maxRetries {
+			if err := p.moveToDLQ(ctx, *batch, *msgIDs, workerID, *retryCount, errors.New("circuit breaker timeout")); err != nil {
+				slog.Error("failed to move batch to DLQ on circuit breaker timeout", "error", err, "group", p.groupName, "worker", workerID)
+			}
+			
+			for _, e := range *batch {
+				domain.EventPool.Put(e)
+			}
+			*batch = (*batch)[:0]
+			*msgIDs = (*msgIDs)[:0]
+			if ticker != nil {
+				ticker.Reset(p.flushInt)
+			}
+			*retryWait = 100 * time.Millisecond
+			*retryCount = 0
+			return
+		}
+
 		wait := p.cb.WaitDuration()
-		if wait > 0 {
-			time.Sleep(wait)
-		} else {
-			time.Sleep(100 * time.Millisecond) // Minimum backoff when open
+		if wait <= 0 {
+			wait = 100 * time.Millisecond
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
 		}
 		return
 	}
 	err := p.flushBatch(ctx, *batch, *msgIDs)
 	if err == nil {
-		p.cb.RecordSuccess()
+		p.cb.RecordSuccess(workerID)
 		metrics.CircuitBreakerState.WithLabelValues(p.groupName).Set(float64(p.cb.State()))
 		for _, e := range *batch {
 			domain.EventPool.Put(e)
@@ -246,37 +268,70 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 		return
 	}
 
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+
 	*retryCount++
-	p.cb.RecordFailure()
+	p.cb.RecordFailure(workerID)
 	metrics.CircuitBreakerState.WithLabelValues(p.groupName).Set(float64(p.cb.State()))
 
 	if *retryCount > p.maxRetries {
-		slog.Error("poison pill detected, moving to DLQ", "error", err, "group", p.groupName, "worker", workerID)
-		pipe := p.rdb.Pipeline()
+		slog.Error("poison pill detected, decomposing batch", "error", err, "group", p.groupName, "worker", workerID)
+
+		var failedIndices []int
+		var successfulMsgIDs []string
 
 		for i, e := range *batch {
-			pipe.XAdd(context.Background(), &redis.XAddArgs{
-				Stream: "ad:events:dlq",
-				Values: map[string]interface{}{
-					"click_id":    e.ClickID,
-					"campaign_id": e.CampaignID.String(),
-					"type":        e.Type,
-					"payload":     e.Payload,
-					"ip":          e.IP,
-					"ua":          e.UA,
-					"error":       err.Error(),
-					"original_id": (*msgIDs)[i],
-					"failed_at":   time.Now().Format(time.RFC3339),
-					"service":     "ad-event-processor",
-					"worker_id":   workerID,
-					"retry_count": *retryCount,
-				},
-			})
+			singleBatch := []*domain.Event{e}
+			if singleErr := p.store.StoreBatch(context.Background(), singleBatch); singleErr != nil {
+				failedIndices = append(failedIndices, i)
+			} else {
+				successfulMsgIDs = append(successfulMsgIDs, (*msgIDs)[i])
+			}
 		}
 
-		pipe.XAck(context.Background(), p.streamName, p.groupName, *msgIDs...)
-		pipe.XDel(context.Background(), p.streamName, *msgIDs...)
-		_, _ = pipe.Exec(context.Background())
+		if len(successfulMsgIDs) > 0 {
+			ackCtx, ackCancel := context.WithTimeout(context.Background(), p.writeTimeout)
+			_ = p.rdb.XAck(ackCtx, p.streamName, p.groupName, successfulMsgIDs...).Err()
+			ackCancel()
+		}
+
+		if len(failedIndices) > 0 {
+			failedBatch := make([]*domain.Event, 0, len(failedIndices))
+			failedMsgIDs := make([]string, 0, len(failedIndices))
+			for _, i := range failedIndices {
+				failedBatch = append(failedBatch, (*batch)[i])
+				failedMsgIDs = append(failedMsgIDs, (*msgIDs)[i])
+			}
+			
+			execErr := p.moveToDLQ(ctx, failedBatch, failedMsgIDs, workerID, *retryCount, fmt.Errorf("batch decomposed: %w", err))
+
+			if execErr != nil {
+				slog.Error("failed to exec dlq pipeline, retaining in PEL", "error", execErr, "group", p.groupName)
+				newBatch := make([]*domain.Event, 0, len(failedIndices))
+				newMsgIDs := make([]string, 0, len(failedIndices))
+				for _, i := range failedIndices {
+					newBatch = append(newBatch, (*batch)[i])
+					newMsgIDs = append(newMsgIDs, (*msgIDs)[i])
+				}
+				for i, e := range *batch {
+					isFailed := false
+					for _, fi := range failedIndices {
+						if i == fi {
+							isFailed = true
+							break
+						}
+					}
+					if !isFailed {
+						domain.EventPool.Put(e)
+					}
+				}
+				*batch = newBatch
+				*msgIDs = newMsgIDs
+				return
+			}
+		}
 
 		for _, e := range *batch {
 			domain.EventPool.Put(e)
@@ -341,6 +396,38 @@ func (p *StreamConsumer) drainNewMessages(workerID string) {
 			}
 		}
 	}
+}
+
+func (p *StreamConsumer) moveToDLQ(ctx context.Context, batch []*domain.Event, msgIDs []string, workerID string, retryCount int, err error) error {
+	pipe := p.rdb.Pipeline()
+	for i, e := range batch {
+		pipe.XAdd(context.Background(), &redis.XAddArgs{
+			Stream: "ad:events:dlq",
+			MaxLen: 100000,
+			Approx: true,
+			Values: map[string]interface{}{
+				"click_id":    e.ClickID,
+				"campaign_id": e.CampaignID.String(),
+				"type":        e.Type,
+				"payload":     e.Payload,
+				"ip":          e.IP,
+				"ua":          e.UA,
+				"error":       err.Error(),
+				"original_id": msgIDs[i],
+				"failed_at":   time.Now().Format(time.RFC3339),
+				"service":     "ad-event-processor",
+				"worker_id":   workerID,
+				"retry_count": retryCount,
+			},
+		})
+		pipe.XAck(context.Background(), p.streamName, p.groupName, msgIDs[i])
+		pipe.XDel(context.Background(), p.streamName, msgIDs[i])
+	}
+
+	execCtx, execCancel := context.WithTimeout(context.Background(), p.writeTimeout)
+	_, execErr := pipe.Exec(execCtx)
+	execCancel()
+	return execErr
 }
 
 func (p *StreamConsumer) parseMessage(id string, values map[string]interface{}) *domain.Event {
@@ -434,13 +521,16 @@ func (p *StreamConsumer) recoverPending(ctx context.Context, consumerID string) 
 
 			if err := p.flushBatch(ctx, batch, msgIDs); err != nil {
 				if !errors.Is(err, context.Canceled) {
-					slog.Error("recovery flush failed", "error", err, "group", p.groupName)
+					p.cb.RecordFailure(consumerID)
+					slog.Error("recovery flush failed, moving to DLQ", "error", err, "group", p.groupName)
+					_ = p.moveToDLQ(ctx, batch, msgIDs, consumerID, 1, fmt.Errorf("recovery flush failed: %w", err))
 				}
 				for _, e := range batch {
 					domain.EventPool.Put(e)
 				}
 				return
 			}
+			p.cb.RecordSuccess(consumerID)
 			for _, e := range batch {
 				domain.EventPool.Put(e)
 			}
@@ -489,14 +579,45 @@ func (p *StreamConsumer) claimStuckMessages(ctx context.Context) {
 		if len(entries) > 0 {
 			batch := make([]*domain.Event, 0, len(entries))
 			msgIDs := make([]string, 0, len(entries))
+			var dlqBatch []*domain.Event
+			var dlqMsgIDs []string
 
 			for _, msg := range entries {
-				batch = append(batch, p.parseMessage(msg.ID, msg.Values))
-				msgIDs = append(msgIDs, msg.ID)
+				evt := p.parseMessage(msg.ID, msg.Values)
+				count, _ := p.rdb.HIncrBy(ctx, "ad:events:retries", msg.ID, 1).Result()
+				if count > int64(p.maxRetries) {
+					dlqBatch = append(dlqBatch, evt)
+					dlqMsgIDs = append(dlqMsgIDs, msg.ID)
+					_ = p.rdb.HDel(ctx, "ad:events:retries", msg.ID).Err()
+				} else {
+					batch = append(batch, evt)
+					msgIDs = append(msgIDs, msg.ID)
+				}
 			}
-			_ = p.flushBatch(ctx, batch, msgIDs)
-			for _, e := range batch {
-				domain.EventPool.Put(e)
+
+			if len(dlqBatch) > 0 {
+				slog.Error("autoclaim retry limit exceeded, moving to DLQ", "group", p.groupName, "count", len(dlqBatch))
+				_ = p.moveToDLQ(ctx, dlqBatch, dlqMsgIDs, "janitor", p.maxRetries+1, errors.New("autoclaim delivery limit exceeded"))
+				for _, e := range dlqBatch {
+					domain.EventPool.Put(e)
+				}
+			}
+
+			if len(batch) > 0 {
+				if err := p.flushBatch(ctx, batch, msgIDs); err != nil {
+					p.cb.RecordFailure("janitor")
+					if !errors.Is(err, context.Canceled) {
+						slog.Error("janitor flush failed", "error", err, "group", p.groupName)
+					}
+				} else {
+					p.cb.RecordSuccess("janitor")
+					for _, id := range msgIDs {
+						_ = p.rdb.HDel(ctx, "ad:events:retries", id).Err()
+					}
+				}
+				for _, e := range batch {
+					domain.EventPool.Put(e)
+				}
 			}
 		}
 

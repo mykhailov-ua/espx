@@ -36,6 +36,9 @@ func (p *MaxMindProvider) GetCountry(ipStr string) (string, error) {
 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.reader == nil {
+		return "", fmt.Errorf("geoip provider closed")
+	}
 
 	record, err := p.reader.Country(ip)
 	if err != nil {
@@ -53,6 +56,9 @@ func (p *MaxMindProvider) IsAnonymous(ipStr string) (bool, error) {
 
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	if p.reader == nil {
+		return false, fmt.Errorf("geoip provider closed")
+	}
 
 	record, err := p.reader.AnonymousIP(ip)
 	if err != nil {
@@ -63,7 +69,14 @@ func (p *MaxMindProvider) IsAnonymous(ipStr string) (bool, error) {
 }
 
 func (p *MaxMindProvider) Close() error {
-	return p.reader.Close()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reader != nil {
+		err := p.reader.Close()
+		p.reader = nil
+		return err
+	}
+	return nil
 }
 
 type MockGeoProvider struct {

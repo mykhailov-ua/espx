@@ -1,6 +1,7 @@
 package ads
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -28,7 +29,7 @@ func (s CircuitState) String() string {
 
 type CircuitBreaker struct {
 	state         atomic.Int32
-	failures      atomic.Int32
+	failures      sync.Map // string -> *atomic.Int32
 	lastOpenedAt  atomic.Int64
 	failThreshold int32
 	openTimeout   time.Duration
@@ -65,13 +66,18 @@ func (cb *CircuitBreaker) Allow() bool {
 	}
 }
 
-func (cb *CircuitBreaker) RecordSuccess() {
-	cb.failures.Store(0)
+func (cb *CircuitBreaker) RecordSuccess(workerID string) {
+	cb.failures.Range(func(key, value interface{}) bool {
+		value.(*atomic.Int32).Store(0)
+		return true
+	})
 	cb.state.Store(int32(CircuitClosed))
 }
 
-func (cb *CircuitBreaker) RecordFailure() {
-	newCount := cb.failures.Add(1)
+func (cb *CircuitBreaker) RecordFailure(workerID string) {
+	val, _ := cb.failures.LoadOrStore(workerID, &atomic.Int32{})
+	counter := val.(*atomic.Int32)
+	newCount := counter.Add(1)
 
 	if newCount >= cb.failThreshold {
 		if oldState := CircuitState(cb.state.Swap(int32(CircuitOpen))); oldState != CircuitOpen {
@@ -84,8 +90,11 @@ func (cb *CircuitBreaker) State() CircuitState {
 	return CircuitState(cb.state.Load())
 }
 
-func (cb *CircuitBreaker) Failures() int {
-	return int(cb.failures.Load())
+func (cb *CircuitBreaker) Failures(workerID string) int {
+	if val, ok := cb.failures.Load(workerID); ok {
+		return int(val.(*atomic.Int32).Load())
+	}
+	return 0
 }
 
 func (cb *CircuitBreaker) WaitDuration() time.Duration {
