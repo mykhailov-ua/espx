@@ -1,0 +1,38 @@
+groups:
+  - name: adpulse-alerts
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: ad_circuit_breaker_state == 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit Breaker is OPEN"
+          description: "Database write failures detected. Processor is routing event batches directly to the Dead Letter Queue (DLQ)."
+
+      - alert: DatabaseWriteErrors
+        expr: rate(ad_db_write_errors_total[1m]) > 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database write errors detected"
+          description: "Processor has encountered write errors when storing event batches to PostgreSQL or ClickHouse."
+
+      - alert: DeadLetterQueueSpike
+        expr: ad_dlq_size_total > 0
+        for: 10s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Dead Letter Queue is not empty"
+          description: "Events are active in the Dead Letter Queue. Action required to inspect and replay raw event payloads."
+
+      - alert: HighRequestLatency
+        expr: histogram_quantile(0.95, sum(rate(ad_http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP request latency detected"
+          description: "p95 HTTP request duration at the Go tracker edge is above 500ms."

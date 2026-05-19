@@ -1,9 +1,20 @@
 global:
   scrape_interval: 5s
+  evaluation_interval: 5s
+
+rule_files:
+  - "prometheus.rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - '127.0.0.1:9093'
+
 scrape_configs:
   - job_name: 'tracker'
     static_configs:
       - targets: ['127.0.0.1:8181', '127.0.0.1:8182', '127.0.0.1:8183', '127.0.0.1:8184']
   - job_name: 'processor'
     static_configs:
-      - targets: ['processor:8186']
+      - targets: ['127.0.0.1:8186']
