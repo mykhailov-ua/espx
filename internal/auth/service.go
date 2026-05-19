@@ -60,6 +60,7 @@ type Service struct {
 	hasher     *PasswordHasher
 	lockout    *LockoutLimiter
 	rdb        redis.UniversalClient
+	rehashSem  chan struct{}
 }
 
 func NewService(repo db.Store, tokenMaker Maker, hasher *PasswordHasher, lockout *LockoutLimiter, rdb redis.UniversalClient) *Service {
@@ -69,6 +70,7 @@ func NewService(repo db.Store, tokenMaker Maker, hasher *PasswordHasher, lockout
 		hasher:     hasher,
 		lockout:    lockout,
 		rdb:        rdb,
+		rehashSem:  make(chan struct{}, 2), // limit concurrent background Argon2id rehashing to at most 2 to avoid CPU exhaustion
 	}
 }
 
@@ -105,7 +107,7 @@ func (s *Service) Register(ctx context.Context, req RegisterDTO) (uuid.UUID, err
 
 	user, err := s.repo.CreateUser(ctx, arg)
 	if err != nil {
-		// Idempotency: if user already exists, return existing ID
+		// User creation deduplication avoids race-induced duplicate registration errors under concurrent requests.
 		existingUser, errGet := s.repo.GetUserByEmail(ctx, req.Email)
 		if errGet == nil {
 			return uuid.UUID(existingUser.ID.Bytes), nil
@@ -159,8 +161,8 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, clientI
 	var user db.User
 	var userFound bool
 
-	// Retrieve the user record first without initiating a transaction to minimize DB lock contention.
-	// In the absence of a user, a dynamic dummy hash is used to guarantee uniform processing time.
+	// Pre-retrieval of user records outside the main txn minimizes locks on the hot path.
+	// We verify credentials with a dynamic dummy hash on miss to preserve uniform time profiles against timing attacks.
 	u, err := s.repo.GetUserByEmail(ctx, email)
 	var hashToVerify string
 	if err == nil {
@@ -188,22 +190,29 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, clientI
 		return pb.LoginResponse{}, ErrInvalidCredentials
 	}
 
-	// Initiate an asynchronous re-hashing process to proactively migrate the password
-	// to the current Argon2id security profile without incurring latency on the hot path.
-	// Uses a distributed lock to prevent CPU exhaustion DoS via concurrent re-hashing requests.
+	// Background migration to Argon2id occurs only if the password hash has insecure parameters.
+	// We throttle concurrent executions using a local semaphore and distributed lock to prevent CPU exhaustion DoS.
 	if errors.Is(verifyErr, ErrInsecureHashParameters) {
 		lockKey := "lock:rehash:" + email
 		if ok, _ := s.rdb.SetNX(ctx, lockKey, "1", time.Minute).Result(); ok {
-			go func(plainPwd, userEmail string) {
-				defer s.rdb.Del(context.Background(), lockKey)
-				newHash, errHash := s.hasher.HashPassword(plainPwd)
-				if errHash == nil {
-					_ = s.repo.UpdatePassword(context.Background(), db.UpdatePasswordParams{
-						Email:        userEmail,
-						PasswordHash: newHash,
-					})
-				}
-			}(password, email)
+			select {
+			case s.rehashSem <- struct{}{}:
+				go func(plainPwd, userEmail string) {
+					defer func() {
+						<-s.rehashSem
+						s.rdb.Del(context.Background(), lockKey)
+					}()
+					newHash, errHash := s.hasher.HashPassword(plainPwd)
+					if errHash == nil {
+						_ = s.repo.UpdatePassword(context.Background(), db.UpdatePasswordParams{
+							Email:        userEmail,
+							PasswordHash: newHash,
+						})
+					}
+				}(password, email)
+			default:
+				s.rdb.Del(ctx, lockKey)
+			}
 		}
 	}
 
@@ -300,7 +309,7 @@ func (s *Service) VerifyToken(ctx context.Context, accessToken string) (db.User,
 }
 
 func (s *Service) RefreshToken(ctx context.Context, refreshTokenStr string, duration time.Duration) (string, string, error) {
-	// Idempotency: check if we recently processed this token
+	// Cached token results absorb retry-storms from network jitter.
 	if s.rdb != nil {
 		cached, err := s.rdb.Get(ctx, "idempotency:refresh:"+refreshTokenStr).Result()
 		if err == nil && cached != "" {
@@ -314,8 +323,7 @@ func (s *Service) RefreshToken(ctx context.Context, refreshTokenStr string, dura
 	var accessToken string
 	var newRefreshTokenStr string
 
-	// Encapsulate session rotation in a serializable transaction to prevent split-brain states
-	// where multiple concurrent refresh requests yield distinct access tokens.
+	// Serializable transactions isolate session rotation to prevent race-induced split-brain duplicate sessions.
 	err := s.repo.ExecTx(ctx, func(q db.Querier) error {
 		session, err := q.GetSessionByRefreshTokenForUpdate(ctx, refreshTokenStr)
 		if err != nil {
@@ -339,7 +347,6 @@ func (s *Service) RefreshToken(ctx context.Context, refreshTokenStr string, dura
 			return ErrSessionBlocked
 		}
 
-		// Enforce strict token rotation by immediately invalidating the consumed refresh token.
 		err = q.BlockSession(ctx, session.ID)
 		if err != nil {
 			return fmt.Errorf("failed to block old session: %w", err)
