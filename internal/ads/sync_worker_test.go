@@ -62,16 +62,16 @@ func TestMultiShardBudgetSync(t *testing.T) {
 
 	// Record spend events on both shards for the same campaign to simulate parallel ingestion.
 	rdb1.SAdd(ctx, "budget:dirty_campaigns", campaignID.String())
-	rdb1.Set(ctx, "budget:sync:campaign:"+campaignID.String(), 10.5, 0)
+	rdb1.Set(ctx, "budget:sync:campaign:"+campaignID.String(), 10500000, 0)
 
 	rdb2.SAdd(ctx, "budget:dirty_campaigns", campaignID.String())
-	rdb2.Set(ctx, "budget:sync:campaign:"+campaignID.String(), 5.25, 0)
+	rdb2.Set(ctx, "budget:sync:campaign:"+campaignID.String(), 5250000, 0)
 
 	repo := new(mockCampaignRepo)
 
 	// Configures expectations for atomic database updates per shard.
-	repo.On("UpdateSpend", mock.Anything, campaignID, decimal.NewFromFloat(10.5)).Return(nil).Once()
-	repo.On("UpdateSpend", mock.Anything, campaignID, decimal.NewFromFloat(5.25)).Return(nil).Once()
+	repo.On("UpdateSpend", mock.Anything, campaignID, decimal.NewFromFloat(10.5).Round(6)).Return(nil).Once()
+	repo.On("UpdateSpend", mock.Anything, campaignID, decimal.NewFromFloat(5.25).Round(6)).Return(nil).Once()
 
 	worker1 := NewSyncWorker(rdb1, repo, nil, 100*time.Millisecond)
 	worker2 := NewSyncWorker(rdb2, repo, nil, 100*time.Millisecond)

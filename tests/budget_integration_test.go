@@ -48,7 +48,7 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	_, err = registry.Sync(ctx)
 	require.NoError(t, err)
 
-	err = rdb.Set(ctx, "budget:campaign:"+campaignID.String(), 50.0, 0).Err()
+	err = rdb.Set(ctx, "budget:campaign:"+campaignID.String(), 50_000_000, 0).Err()
 	require.NoError(t, err)
 
 	filter := ads.NewBudgetFilter(budgetManager, registry, decimal.NewFromFloat(0.10), decimal.NewFromFloat(0.01))
@@ -61,15 +61,15 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	err = filter.Check(ctx, evt)
 	require.NoError(t, err)
 
-	val, err := rdb.Get(ctx, "budget:campaign:"+campaignID.String()).Float64()
+	val, err := rdb.Get(ctx, "budget:campaign:"+campaignID.String()).Int64()
 	require.NoError(t, err)
-	assert.Equal(t, 49.9, val)
+	assert.Equal(t, int64(49_900_000), val)
 
 	err = filter.Check(ctx, evt)
 	require.NoError(t, err)
-	val2, err := rdb.Get(ctx, "budget:campaign:"+campaignID.String()).Float64()
+	val2, err := rdb.Get(ctx, "budget:campaign:"+campaignID.String()).Int64()
 	require.NoError(t, err)
-	assert.Equal(t, 49.9, val2)
+	assert.Equal(t, int64(49_900_000), val2)
 
 	syncWorker.SyncAll(ctx)
 

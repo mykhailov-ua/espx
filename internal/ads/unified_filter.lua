@@ -13,10 +13,21 @@
 -- KEYS[11]: Frequency capping key (fcap:c:{cid}:u:{uid})
 
 -- Args:
--- ...
+-- ARGV[1]: Rate limit window (seconds)
+-- ARGV[2]: Rate limit max requests
+-- ARGV[3]: Duplicate TTL (seconds)
+-- ARGV[4]: Amount (int64 micro-units)
+-- ARGV[5]: Idempotency TTL (seconds)
+-- ARGV[6]: Campaign ID string
+-- ARGV[7]: Customer ID string
+-- ARGV[8]: Max stream length
+-- ARGV[9]: Click ID
+-- ARGV[10]: Event type
+-- ARGV[11]: Payload
+-- ARGV[12]: IP
 -- ARGV[13]: User Agent
 -- ARGV[14]: Is Even Pacing (1 or 0)
--- ARGV[15]: Daily Budget
+-- ARGV[15]: Daily Budget (int64 micro-units)
 -- ARGV[16]: Current Hour Number (1-24)
 -- ARGV[17]: User ID
 -- ARGV[18]: Freq Limit
@@ -62,7 +73,7 @@ if ARGV[14] == "1" then
     local daily_spent = tonumber(redis.call("GET", KEYS[10]) or 0)
     local daily_limit = tonumber(ARGV[15])
     local hour_num = tonumber(ARGV[16])
-    local cumulative_limit = (daily_limit / 24) * hour_num
+    local cumulative_limit = math.floor(daily_limit / 24) * hour_num
     if hour_num == 24 then cumulative_limit = daily_limit end
     
     if daily_spent + amount > cumulative_limit then
@@ -78,15 +89,15 @@ if freq_limit > 0 and user_id ~= "" then
 end
 
 -- 6. Atomic Updates
-redis.call("INCRBYFLOAT", KEYS[3], -amount)
-redis.call("INCRBYFLOAT", KEYS[5], amount)
-redis.call("INCRBYFLOAT", KEYS[6], amount)
+redis.call("INCRBY", KEYS[3], -amount)
+redis.call("INCRBY", KEYS[5], amount)
+redis.call("INCRBY", KEYS[6], amount)
 redis.call("SADD", KEYS[7], ARGV[6])
 redis.call("SADD", KEYS[8], ARGV[7])
 redis.call("SET", KEYS[4], "1", "EX", ARGV[5])
 
 if ARGV[14] == "1" then
-    redis.call("INCRBYFLOAT", KEYS[10], amount)
+    redis.call("INCRBY", KEYS[10], amount)
     redis.call("EXPIRE", KEYS[10], 172800)
 end
 

@@ -6,6 +6,7 @@ import (
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -90,19 +91,19 @@ if inflight then total = total + tonumber(inflight) end
 if current then total = total + tonumber(current) end
 
 if total <= 0 then
-    if current and tonumber(current) <= 0.000001 then
+    if current and tonumber(current) <= 0 then
         redis.call("DEL", KEYS[1])
     end
     return "0"
 end
 
 if current and tonumber(current) > 0 then
-    local remaining = redis.call("INCRBYFLOAT", KEYS[1], -tonumber(current))
-    redis.call("INCRBYFLOAT", KEYS[2], tonumber(current))
-    if tonumber(remaining) <= 0.000001 then
+    local remaining = redis.call("INCRBY", KEYS[1], -tonumber(current))
+    redis.call("INCRBY", KEYS[2], tonumber(current))
+    if tonumber(remaining) <= 0 then
         redis.call("DEL", KEYS[1])
     end
-elseif current and tonumber(current) <= 0.000001 then
+elseif current and tonumber(current) <= 0 then
     redis.call("DEL", KEYS[1])
 end
 
@@ -111,8 +112,8 @@ return tostring(total)
 `
 
 const commitSyncScript = `
-local remaining = redis.call("INCRBYFLOAT", KEYS[1], -tonumber(ARGV[1]))
-if tonumber(remaining) <= 0.000001 then
+local remaining = redis.call("INCRBY", KEYS[1], -tonumber(ARGV[1]))
+if tonumber(remaining) <= 0 then
     redis.call("DEL", KEYS[1])
     redis.call("SREM", KEYS[2], ARGV[2])
 end
@@ -139,13 +140,15 @@ func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string
 		return
 	}
 
-	amount, err := decimal.NewFromString(amountStr.(string))
-	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+	amountMicro, err := strconv.ParseInt(amountStr.(string), 10, 64)
+	if err != nil || amountMicro <= 0 {
 		return
 	}
 
+	amount := MicroToDecimal(amountMicro)
+
 	if err := updateFn(ctx, id, amount); err == nil {
-		w.rdb.Eval(ctx, commitSyncScript, []string{inFlightKey, dirtySet, lockKey}, amount.InexactFloat64(), idStr)
+		w.rdb.Eval(ctx, commitSyncScript, []string{inFlightKey, dirtySet, lockKey}, amountMicro, idStr)
 	} else {
 		w.rdb.Del(ctx, lockKey)
 	}
