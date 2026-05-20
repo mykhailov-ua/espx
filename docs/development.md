@@ -6,7 +6,6 @@ Tooling, testing, and maintenance workflow for the sharded ingestion pipeline.
 - Go 1.25+
 - Docker & Docker Compose
 - `buf` (for Protobuf generation)
-- `k6` (for performance benchmarking)
 
 ## Makefile Targets
 
@@ -76,13 +75,6 @@ The docker-compose volumes mount `deploy/geoip` onto the stateless tracker repli
 
 ## Testing & Benchmarking
 
-### Performance Tests
-Located in `tests/load/`. Use `k6` to validate throughput and latency.
-```bash
-# Run load test
-docker compose run --rm k6 run /scripts/rps_100k.js
-```
-
 ### Integration Tests
 Integration tests require the full infrastructure stack to be running.
 - `tests/e2e_test.go`: Validates sharding and Protobuf ingestion.
@@ -92,3 +84,34 @@ Integration tests require the full infrastructure stack to be running.
 - **pprof**: Enabled on trackers (ports 8181-8184) and processor (8186).
 - **Logs**: Structured JSON logs via `slog`. Use `docker compose logs -f <service>` for real-time monitoring.
 - **Metrics**: Access Grafana at `http://localhost:3100` (anonymous admin access enabled).
+
+## CLI Management Tools
+
+### DLQ Management Tool (`cmd/dlq-tool`)
+The DLQ tool handles archiving, restoring, requeueing, and inspecting events from the Dead Letter Queue stream.
+
+#### Commands and Operations:
+* **Archive DLQ events to disk**:
+  ```bash
+  go run cmd/dlq-tool/main.go -action=archive -stream=ad:events:dlq -dest=dlq_archive.bin -batch=1000
+  ```
+  Extracts unprocessable events from the specified Redis stream, packages them into serialized Protobuf `AdDLQEvent` payloads, writes them to the destination file using a length-prefixed format (4-byte Big-Endian size prefix + message bytes), and removes successfully written messages from the Redis stream.
+
+* **Restore archived DLQ events from disk**:
+  ```bash
+  go run cmd/dlq-tool/main.go -action=restore -dest=dlq_archive.bin -stream=ad:events -batch=1000
+  ```
+  Reads the length-prefixed binary `AdDLQEvent` payloads from the file, extracts the embedded original `AdStreamEvent` payload, and pushes them back into the active processing stream (e.g. `ad:events`) in Redis via batch pipelines.
+
+* **Requeue DLQ events directly in Redis**:
+  ```bash
+  go run cmd/dlq-tool/main.go -action=requeue -stream=ad:events:dlq -dest=ad:events -batch=1000
+  ```
+  Pushes unprocessable events from the DLQ stream directly back into the target active event stream in Redis without disk I/O.
+
+* **Inspect live stream entries**:
+  ```bash
+  go run cmd/dlq-tool/main.go -action=inspect -stream=ad:events:dlq
+  ```
+  Prints human-readable representations of live stream messages (decoding Protobuf structures and falling back to legacy flat-maps).
+

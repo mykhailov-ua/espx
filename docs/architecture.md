@@ -15,12 +15,13 @@ The architecture is structured into five distinct operational layers communicati
    - **Auth Service (`:51051`)**: Internal gRPC microservice handling `Argon2id` password hashing and issuing cryptographic PASETO tokens.
 
 3. **Ingestion Plane (Tracker Replicas)**
-   - Stateless Go instances (`:8181-8184`) running in `network_mode: host` to maximize kernel packet processing throughput.
-   - Employs `sync.Pool` object recycling to maintain zero heap allocations on the hot path.
+   - Stateless Go instances (`:8181-8184`) running in `network_mode: host` to bypass bridge network layers and optimize packet processing throughput.
+   - Employs `sync.Pool` object recycling to maintain zero heap allocations on the ingestion path.
+   - Eliminates allocations on the hot path by utilizing pre-generated domain UUID strings from a registry cache and representing budgets as 64-bit integers scaled by 1,000,000 (10^6) to avoid decimal parsing overhead.
 
 4. **Edge Caching Layer (Redis Shard Cluster)**
    - 6-node Redis cluster sharded via consistent JumpHash indexing.
-   - Executes atomic Lua scripts for budget verification, deduplication, and IP blacklists, while buffering valid events in Redis Streams (`ad:events:stream`).
+   - Executes atomic Lua scripts for budget verification, deduplication, and IP blacklists, while buffering valid events as serialized binary Protobuf `AdStreamEvent` payloads in Redis Streams (`ad:events:stream`).
 
 5. **Asynchronous Settlement & Storage**
    - **Processor Pool (`:8186`)**: Background consumer workers fetching stream batches and executing multi-row database updates.
@@ -38,12 +39,16 @@ The architecture is structured into five distinct operational layers communicati
 1. **Ingress & Authentication**: Requests to `/admin/*` arrive at the Management Gateway (`:8188`). The gateway authenticates incoming calls by intercepting HTTP cookies (`accessToken` and `refreshToken`). Cryptographic PASETO verification occurs entirely in memory.
 2. **Session Revocation & RBAC**: The gateway checks token revocation status against Redis (`revoked:token:{id}`) with a 100ms circuit breaker. The user's role (`SA`, `M`, `C`, `G`) is evaluated against endpoint permissions. For Customer (`C`) requests, the gateway enforces a hard data isolation filter by extracting `CustomerID` from the token payload.
 3. **Database Execution**: All state-modifying operations (e.g., `TopUpBalance`, `CreateCampaign`, `BlockIP`, `UpdateSettings`) execute within a strict PostgreSQL ACID transaction (`pgx.BeginFunc`). Write operations generate immutable ledger entries in `balance_ledger` and log administrative actions in `admin_audit_log`.
-4. **Cache Replication**: Successful database modifications trigger cache updates in the sharded Redis cluster. To ensure eventual consistency across network partitions, a background synchronization worker (`RunSystemStateSyncer`) reconciles PostgreSQL state with Redis every 60 seconds.
+4. **Transactional Outbox Replication**: Successful database modifications write an event payload to the `outbox_events` table within the same database transaction. Upon commit, a PostgreSQL trigger `outbox_event_trigger` executes `pg_notify('outbox_channel', event_id)`. A background `OutboxWorker` processes these events:
+    - **Trigger/LISTEN Path**: The worker maintains a dedicated database connection running `LISTEN outbox_channel` and waits on `WaitForNotification`.
+    - **Decoupled Transaction Pattern**: Upon a signal, the worker leases a batch of pending events to a `'PROCESSING'` state by executing a transaction with restricted scope (using `FOR UPDATE SKIP LOCKED`) and commits the transaction immediately. All Redis I/O (pipelined writes and Pub/Sub notifications) is then executed outside PostgreSQL database transaction boundaries. The worker then runs a final batch update to set status to `'PROCESSED'` or revert failed events to `'PENDING'`.
+    - **Janitor Loop**: A periodic self-healing loop runs at 5 times the default interval to reset events stuck in `'PROCESSING'` for over 5 minutes and perform safety drain checks.
+
 
 ### 2. Ad Event Ingestion & Processing Lifecycle
-1. **Ingress**: Telemetry events (impressions and clicks) reach Tracker replicas (`:8181-8184`) via Nginx over HTTP/3 in Protobuf or JSON format. Replicas operate in `network_mode: host` to bypass Docker bridge NAT translation and utilize `sync.Pool` to minimize heap memory allocations.
+1. **Ingress**: Telemetry events (impressions and clicks) reach Tracker replicas (`:8181-8184`) via Nginx over HTTP/3 in Protobuf or JSON format. Replicas operate in `network_mode: host` to bypass Docker bridge NAT translation. Ingestion uses pre-allocated domain UUID strings from a registry cache and represents campaign budgets as 64-bit integers scaled by 1,000,000 (10^6) to prevent heap allocations. Replicas utilize `sync.Pool` for payload buffer and event structure reuse.
 2. **Atomic Edge Lua Evaluation**: The tracker computes a consistent JumpHash on `CampaignID` to locate the assigned Redis shard. It executes a unified, atomic Lua script that verifies IP blacklists, deduplicates clicks, enforces user frequency capping, and reserves the micro-budget. If validation fails, the event is dropped or flagged for fraud analysis.
-3. **Stream Queuing**: Validated events are appended to the Redis Stream `ad:events:stream`.
+3. **Stream Queuing**: Validated events are serialized as binary Protobuf `AdStreamEvent` payloads and appended to the Redis Stream `ad:events:stream`.
 4. **Asynchronous Settlement**: Processor pool workers (`:8186`) consume event batches from Redis Streams via Consumer Groups. Deduplicated events trigger multi-row batch updates in PostgreSQL to deduct campaign budgets and customer balances. Simultaneously, raw event logs and anti-fraud telemetry are written to ClickHouse via memory-mapped buffers for columnar analytics.
 
 ## Storage Specifications & Scaling Strategy
