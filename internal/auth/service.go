@@ -314,10 +314,10 @@ func (s *Service) Login(ctx context.Context, email, password, userAgent, clientI
 		AccessToken:  accessToken,
 		RefreshToken: refreshTokenStr,
 		User: &pb.User{
-			ID:         uuid.UUID(user.ID.Bytes).String(),
+			Id:         uuid.UUID(user.ID.Bytes).String(),
 			Email:      user.Email,
 			Role:       user.Role,
-			CustomerID: uuid.UUID(user.CustomerID.Bytes).String(),
+			CustomerId: uuid.UUID(user.CustomerID.Bytes).String(),
 			CreatedAt:  timestamppb.New(user.CreatedAt.Time),
 		},
 	}, nil

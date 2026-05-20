@@ -63,10 +63,10 @@ func TestAuthHandler_Login(t *testing.T) {
 					AccessToken:  "access-token-jwt",
 					RefreshToken: "refresh-token-uuid",
 					User: &pb.User{
-						ID:         "user-123",
+						Id:         "user-123",
 						Email:      "test@example.com",
 						Role:       "admin",
-						CustomerID: "customer-456",
+						CustomerId: "customer-456",
 						CreatedAt:  timestamppb.Now(),
 					},
 				}, nil

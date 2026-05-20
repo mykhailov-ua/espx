@@ -5,7 +5,7 @@ local shared_dict = ngx.shared.circuit_breaker
 local REDIS_HOST = os.getenv("REDIS_HOST") or "127.0.0.1"
 local REDIS_PORT = os.getenv("REDIS_PORT") or 6379
 local REDIS_PASS = os.getenv("REDIS_PASS") or ""
-local FAIL_THRESHOLD = 0.05 -- 5%
+local FAIL_THRESHOLD = 0.95 -- 95%
 local SAMPLE_WINDOW = 100
 
 -- Stats tracking (10-second sliding window over 2 buckets)

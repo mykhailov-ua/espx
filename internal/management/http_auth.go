@@ -113,10 +113,10 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-CSRF-Token", csrf)
 
 	userDTO := UserDTO{
-		ID:          resp.User.ID,
+		ID:          resp.User.Id,
 		Email:       resp.User.Email,
 		Role:        resp.User.Role,
-		CustomerID:  resp.User.CustomerID,
+		CustomerID:  resp.User.CustomerId,
 		Permissions: GetPermissionsForRole(resp.User.Role),
 	}
 

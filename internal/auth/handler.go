@@ -78,8 +78,8 @@ func (h *Handler) extractClientIP(ctx context.Context) string {
 func (h *Handler) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.RegisterResponse, error) {
 	var customerID uuid.UUID
 	var err error
-	if req.CustomerID != "" {
-		customerID, err = uuid.Parse(req.CustomerID)
+	if req.CustomerId != "" {
+		customerID, err = uuid.Parse(req.CustomerId)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "invalid customer id: %v", err)
 		}
@@ -132,10 +132,10 @@ func (h *Handler) VerifyToken(ctx context.Context, req *pb.VerifyTokenRequest) (
 
 	return &pb.VerifyTokenResponse{
 		User: &pb.User{
-			ID:         uuid.UUID(user.ID.Bytes).String(),
+			Id:         uuid.UUID(user.ID.Bytes).String(),
 			Email:      user.Email,
 			Role:       user.Role,
-			CustomerID: uuid.UUID(user.CustomerID.Bytes).String(),
+			CustomerId: uuid.UUID(user.CustomerID.Bytes).String(),
 			CreatedAt:  timestamppb.New(user.CreatedAt.Time),
 		},
 	}, nil
