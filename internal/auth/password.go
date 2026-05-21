@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -70,6 +71,10 @@ func (h *PasswordHasher) GetDummyHash() string {
 	return h.dummyHash
 }
 
+func (h *PasswordHasher) GetParallelism() uint8 {
+	return h.parallelism
+}
+
 func (h *PasswordHasher) HashPassword(password string) (string, error) {
 	if password == "" || len(password) > MaxPasswordLength {
 		return "", ErrInvalidPassword
@@ -105,35 +110,58 @@ func (h *PasswordHasher) HashPassword(password string) (string, error) {
 	return encodedHash, nil
 }
 
+func unsafeStringToBytes(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
 func VerifyPassword(password, encodedHash string) (bool, error) {
 	if password == "" || len(password) > MaxPasswordLength {
 		return false, ErrAuthenticationFailed
 	}
 
-	vals := strings.SplitN(encodedHash, "$", 6)
-	if len(vals) != 6 {
+	const prefix = "$argon2id$v="
+	if !strings.HasPrefix(encodedHash, prefix) {
 		return false, ErrAuthenticationFailed
 	}
 
-	if vals[1] != "argon2id" {
+	idx1 := len(prefix)
+	idx2 := strings.IndexByte(encodedHash[idx1:], '$')
+	if idx2 == -1 {
 		return false, ErrAuthenticationFailed
 	}
+	idx2 += idx1
 
-	if !strings.HasPrefix(vals[2], "v=") {
-		return false, ErrAuthenticationFailed
-	}
-	version, err := strconv.Atoi(vals[2][2:])
+	versionStr := encodedHash[idx1:idx2]
+	version, err := strconv.Atoi(versionStr)
 	if err != nil || version != argon2.Version {
 		return false, ErrAuthenticationFailed
 	}
 
-	p := params{}
-	parts := strings.Split(vals[3], ",")
-	if len(parts) != 3 {
+	idx3 := idx2 + 1
+	idx4 := strings.IndexByte(encodedHash[idx3:], '$')
+	if idx4 == -1 {
 		return false, ErrAuthenticationFailed
 	}
+	idx4 += idx3
 
-	for _, part := range parts {
+	paramsStr := encodedHash[idx3:idx4]
+	p := params{}
+
+	sIdx := 0
+	for sIdx < len(paramsStr) {
+		eIdx := strings.IndexByte(paramsStr[sIdx:], ',')
+		var part string
+		if eIdx == -1 {
+			part = paramsStr[sIdx:]
+			sIdx = len(paramsStr)
+		} else {
+			part = paramsStr[sIdx : sIdx+eIdx]
+			sIdx += eIdx + 1
+		}
+
 		if strings.HasPrefix(part, "m=") {
 			m, err := strconv.ParseUint(part[2:], 10, 32)
 			if err != nil || m > uint64(maxMemory) {
@@ -157,21 +185,53 @@ func VerifyPassword(password, encodedHash string) (bool, error) {
 		}
 	}
 
-	salt, err := base64.RawStdEncoding.DecodeString(vals[4])
-	if err != nil || uint32(len(salt)) < minSaltLength {
+	idx5 := idx4 + 1
+	idx6 := strings.IndexByte(encodedHash[idx5:], '$')
+	if idx6 == -1 {
 		return false, ErrAuthenticationFailed
 	}
-	p.saltLength = uint32(len(salt))
+	idx6 += idx5
 
-	hash, err := base64.RawStdEncoding.DecodeString(vals[5])
-	if err != nil || uint32(len(hash)) < minHashLength {
+	b64Salt := encodedHash[idx5:idx6]
+	b64Hash := encodedHash[idx6+1:]
+
+	saltLen := base64.RawStdEncoding.DecodedLen(len(b64Salt))
+	if uint32(saltLen) < minSaltLength {
 		return false, ErrAuthenticationFailed
 	}
-	p.keyLength = uint32(len(hash))
 
-	comparisonHash := argon2.IDKey([]byte(password), salt, p.iterations, p.memory, p.parallelism, p.keyLength)
+	hashLen := base64.RawStdEncoding.DecodedLen(len(b64Hash))
+	if uint32(hashLen) < minHashLength {
+		return false, ErrAuthenticationFailed
+	}
 
-	// ConstantTimeCompare prevents timing attacks when validating the derived hash against the stored hash.
+	var saltBuf [64]byte
+	var hashBuf [128]byte
+
+	if saltLen > len(saltBuf) || hashLen > len(hashBuf) {
+		return false, ErrAuthenticationFailed
+	}
+
+	nSalt, err := base64.RawStdEncoding.Decode(saltBuf[:], unsafeStringToBytes(b64Salt))
+	if err != nil || uint32(nSalt) < minSaltLength {
+		return false, ErrAuthenticationFailed
+	}
+	salt := saltBuf[:nSalt]
+	p.saltLength = uint32(nSalt)
+
+	nHash, err := base64.RawStdEncoding.Decode(hashBuf[:], unsafeStringToBytes(b64Hash))
+	if err != nil || uint32(nHash) < minHashLength {
+		return false, ErrAuthenticationFailed
+	}
+	hash := hashBuf[:nHash]
+	p.keyLength = uint32(nHash)
+
+	var passwordBuf [128]byte
+	copy(passwordBuf[:], password)
+	passwordBytes := passwordBuf[:len(password)]
+
+	comparisonHash := argon2.IDKey(passwordBytes, salt, p.iterations, p.memory, p.parallelism, p.keyLength)
+
 	if subtle.ConstantTimeCompare(hash, comparisonHash) == 1 {
 		if p.memory < minMemory || p.iterations < minIterations || p.parallelism < minParallelism {
 			return true, ErrInsecureHashParameters
