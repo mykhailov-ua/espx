@@ -147,10 +147,37 @@ func (q *Queries) CreateBlacklistIP(ctx context.Context, arg CreateBlacklistIPPa
 	return i, err
 }
 
+const createBrand = `-- name: CreateBrand :one
+INSERT INTO advertiser_brands (id, customer_id, name)
+VALUES ($1, $2, $3)
+RETURNING id, customer_id, name, created_at, updated_at, freq_limit, freq_window
+`
+
+type CreateBrandParams struct {
+	ID         pgtype.UUID `json:"id"`
+	CustomerID pgtype.UUID `json:"customer_id"`
+	Name       string      `json:"name"`
+}
+
+func (q *Queries) CreateBrand(ctx context.Context, arg CreateBrandParams) (AdvertiserBrand, error) {
+	row := q.db.QueryRow(ctx, createBrand, arg.ID, arg.CustomerID, arg.Name)
+	var i AdvertiserBrand
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FreqLimit,
+		&i.FreqWindow,
+	)
+	return i, err
+}
+
 const createCustomer = `-- name: CreateCustomer :one
 INSERT INTO customers (id, name, balance, currency)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, balance, currency, created_at, updated_at
+RETURNING id, name, balance, currency, created_at, updated_at, allowed_overdraft
 `
 
 type CreateCustomerParams struct {
@@ -175,6 +202,7 @@ func (q *Queries) CreateCustomer(ctx context.Context, arg CreateCustomerParams) 
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedOverdraft,
 	)
 	return i, err
 }
@@ -270,6 +298,82 @@ func (q *Queries) DeleteBlacklistIP(ctx context.Context, ip string) error {
 	return err
 }
 
+const getAllActiveCampaignsWithStats = `-- name: GetAllActiveCampaignsWithStats :many
+SELECT 
+    c.id, c.name, c.status, c.budget_limit, c.created_at, c.updated_at, c.customer_id, c.current_spend, c.deleted_at, c.pacing_mode, c.daily_budget, c.timezone, c.freq_limit, c.freq_window, c.target_countries, c.brand_id, c.brand_fcap_key,
+    COALESCE(SUM(s.impressions_count), 0)::bigint AS total_impressions,
+    COALESCE(SUM(s.clicks_count), 0)::bigint AS total_clicks,
+    COALESCE(SUM(s.conversions_count), 0)::bigint AS total_conversions
+FROM campaigns c
+LEFT JOIN campaign_stats s ON c.id = s.campaign_id
+WHERE c.status = 'ACTIVE'
+GROUP BY c.id
+`
+
+type GetAllActiveCampaignsWithStatsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	Name             string             `json:"name"`
+	Status           CampaignStatusType `json:"status"`
+	BudgetLimit      pgtype.Numeric     `json:"budget_limit"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	CustomerID       pgtype.UUID        `json:"customer_id"`
+	CurrentSpend     pgtype.Numeric     `json:"current_spend"`
+	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
+	PacingMode       PacingModeType     `json:"pacing_mode"`
+	DailyBudget      pgtype.Numeric     `json:"daily_budget"`
+	Timezone         string             `json:"timezone"`
+	FreqLimit        pgtype.Int4        `json:"freq_limit"`
+	FreqWindow       pgtype.Int4        `json:"freq_window"`
+	TargetCountries  []string           `json:"target_countries"`
+	BrandID          pgtype.UUID        `json:"brand_id"`
+	BrandFcapKey     string             `json:"brand_fcap_key"`
+	TotalImpressions int64              `json:"total_impressions"`
+	TotalClicks      int64              `json:"total_clicks"`
+	TotalConversions int64              `json:"total_conversions"`
+}
+
+func (q *Queries) GetAllActiveCampaignsWithStats(ctx context.Context) ([]GetAllActiveCampaignsWithStatsRow, error) {
+	rows, err := q.db.Query(ctx, getAllActiveCampaignsWithStats)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetAllActiveCampaignsWithStatsRow
+	for rows.Next() {
+		var i GetAllActiveCampaignsWithStatsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Status,
+			&i.BudgetLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CustomerID,
+			&i.CurrentSpend,
+			&i.DeletedAt,
+			&i.PacingMode,
+			&i.DailyBudget,
+			&i.Timezone,
+			&i.FreqLimit,
+			&i.FreqWindow,
+			&i.TargetCountries,
+			&i.BrandID,
+			&i.BrandFcapKey,
+			&i.TotalImpressions,
+			&i.TotalClicks,
+			&i.TotalConversions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAllBlacklist = `-- name: GetAllBlacklist :many
 SELECT ip, reason FROM ip_blacklist
 `
@@ -328,8 +432,46 @@ func (q *Queries) GetAllSystemSettings(ctx context.Context) ([]GetAllSystemSetti
 	return items, nil
 }
 
+const getBrand = `-- name: GetBrand :one
+SELECT id, customer_id, name, created_at, updated_at, freq_limit, freq_window FROM advertiser_brands WHERE id = $1 LIMIT 1
+`
+
+func (q *Queries) GetBrand(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error) {
+	row := q.db.QueryRow(ctx, getBrand, id)
+	var i AdvertiserBrand
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FreqLimit,
+		&i.FreqWindow,
+	)
+	return i, err
+}
+
+const getBrandForUpdate = `-- name: GetBrandForUpdate :one
+SELECT id, customer_id, name, created_at, updated_at, freq_limit, freq_window FROM advertiser_brands WHERE id = $1 LIMIT 1 FOR UPDATE
+`
+
+func (q *Queries) GetBrandForUpdate(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error) {
+	row := q.db.QueryRow(ctx, getBrandForUpdate, id)
+	var i AdvertiserBrand
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FreqLimit,
+		&i.FreqWindow,
+	)
+	return i, err
+}
+
 const getCampaignFull = `-- name: GetCampaignFull :one
-SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries FROM campaigns
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns
 WHERE id = $1
 `
 
@@ -352,12 +494,90 @@ func (q *Queries) GetCampaignFull(ctx context.Context, id pgtype.UUID) (Campaign
 		&i.FreqLimit,
 		&i.FreqWindow,
 		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
 	)
 	return i, err
 }
 
+const getCampaignsWithStats = `-- name: GetCampaignsWithStats :many
+SELECT 
+    c.id, c.name, c.status, c.budget_limit, c.created_at, c.updated_at, c.customer_id, c.current_spend, c.deleted_at, c.pacing_mode, c.daily_budget, c.timezone, c.freq_limit, c.freq_window, c.target_countries, c.brand_id, c.brand_fcap_key,
+    COALESCE(SUM(s.impressions_count), 0)::bigint AS total_impressions,
+    COALESCE(SUM(s.clicks_count), 0)::bigint AS total_clicks,
+    COALESCE(SUM(s.conversions_count), 0)::bigint AS total_conversions
+FROM campaigns c
+LEFT JOIN campaign_stats s ON c.id = s.campaign_id
+WHERE c.customer_id = $1 AND c.status = 'ACTIVE'
+GROUP BY c.id
+`
+
+type GetCampaignsWithStatsRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	Name             string             `json:"name"`
+	Status           CampaignStatusType `json:"status"`
+	BudgetLimit      pgtype.Numeric     `json:"budget_limit"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	CustomerID       pgtype.UUID        `json:"customer_id"`
+	CurrentSpend     pgtype.Numeric     `json:"current_spend"`
+	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
+	PacingMode       PacingModeType     `json:"pacing_mode"`
+	DailyBudget      pgtype.Numeric     `json:"daily_budget"`
+	Timezone         string             `json:"timezone"`
+	FreqLimit        pgtype.Int4        `json:"freq_limit"`
+	FreqWindow       pgtype.Int4        `json:"freq_window"`
+	TargetCountries  []string           `json:"target_countries"`
+	BrandID          pgtype.UUID        `json:"brand_id"`
+	BrandFcapKey     string             `json:"brand_fcap_key"`
+	TotalImpressions int64              `json:"total_impressions"`
+	TotalClicks      int64              `json:"total_clicks"`
+	TotalConversions int64              `json:"total_conversions"`
+}
+
+func (q *Queries) GetCampaignsWithStats(ctx context.Context, customerID pgtype.UUID) ([]GetCampaignsWithStatsRow, error) {
+	rows, err := q.db.Query(ctx, getCampaignsWithStats, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetCampaignsWithStatsRow
+	for rows.Next() {
+		var i GetCampaignsWithStatsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Status,
+			&i.BudgetLimit,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CustomerID,
+			&i.CurrentSpend,
+			&i.DeletedAt,
+			&i.PacingMode,
+			&i.DailyBudget,
+			&i.Timezone,
+			&i.FreqLimit,
+			&i.FreqWindow,
+			&i.TargetCountries,
+			&i.BrandID,
+			&i.BrandFcapKey,
+			&i.TotalImpressions,
+			&i.TotalClicks,
+			&i.TotalConversions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCustomerForUpdate = `-- name: GetCustomerForUpdate :one
-SELECT id, name, balance, currency, created_at, updated_at FROM customers
+SELECT id, name, balance, currency, created_at, updated_at, allowed_overdraft FROM customers
 WHERE id = $1
 FOR UPDATE
 `
@@ -372,6 +592,7 @@ func (q *Queries) GetCustomerForUpdate(ctx context.Context, id pgtype.UUID) (Cus
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedOverdraft,
 	)
 	return i, err
 }
@@ -410,7 +631,7 @@ func (q *Queries) GetCustomerStats(ctx context.Context, customerIds []pgtype.UUI
 }
 
 const getDrainingCampaignsForUpdate = `-- name: GetDrainingCampaignsForUpdate :many
-SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries FROM campaigns
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns
 WHERE status = 'DRAINING' AND updated_at < $1
 ORDER BY updated_at ASC
 LIMIT $2
@@ -447,6 +668,8 @@ func (q *Queries) GetDrainingCampaignsForUpdate(ctx context.Context, arg GetDrai
 			&i.FreqLimit,
 			&i.FreqWindow,
 			&i.TargetCountries,
+			&i.BrandID,
+			&i.BrandFcapKey,
 		); err != nil {
 			return nil, err
 		}
@@ -609,8 +832,42 @@ func (q *Queries) ListBlacklist(ctx context.Context, arg ListBlacklistParams) ([
 	return items, nil
 }
 
+const listBrandsByCustomer = `-- name: ListBrandsByCustomer :many
+SELECT id, customer_id, name, created_at, updated_at, freq_limit, freq_window FROM advertiser_brands
+WHERE customer_id = $1
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListBrandsByCustomer(ctx context.Context, customerID pgtype.UUID) ([]AdvertiserBrand, error) {
+	rows, err := q.db.Query(ctx, listBrandsByCustomer, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdvertiserBrand
+	for rows.Next() {
+		var i AdvertiserBrand
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.FreqLimit,
+			&i.FreqWindow,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCampaigns = `-- name: ListCampaigns :many
-SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries FROM campaigns
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns
 WHERE ($3::uuid IS NULL OR customer_id = $3::uuid)
   AND ($4::text IS NULL OR status::text = $4::text)
 ORDER BY created_at DESC
@@ -654,6 +911,8 @@ func (q *Queries) ListCampaigns(ctx context.Context, arg ListCampaignsParams) ([
 			&i.FreqLimit,
 			&i.FreqWindow,
 			&i.TargetCountries,
+			&i.BrandID,
+			&i.BrandFcapKey,
 		); err != nil {
 			return nil, err
 		}
@@ -707,7 +966,7 @@ func (q *Queries) ListCustomerLedger(ctx context.Context, arg ListCustomerLedger
 }
 
 const listCustomers = `-- name: ListCustomers :many
-SELECT id, name, balance, currency, created_at, updated_at FROM customers
+SELECT id, name, balance, currency, created_at, updated_at, allowed_overdraft FROM customers
 ORDER BY created_at DESC
 LIMIT $1 OFFSET $2
 `
@@ -733,7 +992,46 @@ func (q *Queries) ListCustomers(ctx context.Context, arg ListCustomersParams) ([
 			&i.Currency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AllowedOverdraft,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomersForScoring = `-- name: ListCustomersForScoring :many
+SELECT 
+    c.id,
+    COALESCE(FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - c.created_at)) / 86400), 0)::integer AS age_days,
+    COALESCE(SUM(l.amount), 0.00)::numeric AS topup_sum_30d
+FROM customers c
+LEFT JOIN balance_ledger l ON l.customer_id = c.id 
+    AND l.type = 'TOPUP' 
+    AND l.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+GROUP BY c.id
+`
+
+type ListCustomersForScoringRow struct {
+	ID          pgtype.UUID    `json:"id"`
+	AgeDays     int32          `json:"age_days"`
+	TopupSum30d pgtype.Numeric `json:"topup_sum_30d"`
+}
+
+func (q *Queries) ListCustomersForScoring(ctx context.Context) ([]ListCustomersForScoringRow, error) {
+	rows, err := q.db.Query(ctx, listCustomersForScoring)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCustomersForScoringRow
+	for rows.Next() {
+		var i ListCustomersForScoringRow
+		if err := rows.Scan(&i.ID, &i.AgeDays, &i.TopupSum30d); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -823,12 +1121,50 @@ func (q *Queries) SoftDeleteCampaign(ctx context.Context, id pgtype.UUID) error 
 	return err
 }
 
+const updateCampaignBudget = `-- name: UpdateCampaignBudget :one
+UPDATE campaigns
+SET budget_limit = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
+`
+
+type UpdateCampaignBudgetParams struct {
+	ID          pgtype.UUID    `json:"id"`
+	BudgetLimit pgtype.Numeric `json:"budget_limit"`
+}
+
+func (q *Queries) UpdateCampaignBudget(ctx context.Context, arg UpdateCampaignBudgetParams) (Campaign, error) {
+	row := q.db.QueryRow(ctx, updateCampaignBudget, arg.ID, arg.BudgetLimit)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.BudgetLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CustomerID,
+		&i.CurrentSpend,
+		&i.DeletedAt,
+		&i.PacingMode,
+		&i.DailyBudget,
+		&i.Timezone,
+		&i.FreqLimit,
+		&i.FreqWindow,
+		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
+	)
+	return i, err
+}
+
 const updateCampaignStatus = `-- name: UpdateCampaignStatus :one
 UPDATE campaigns
 SET status = $2,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = $1
-RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries
+RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
 `
 
 type UpdateCampaignStatusParams struct {
@@ -855,6 +1191,8 @@ func (q *Queries) UpdateCampaignStatus(ctx context.Context, arg UpdateCampaignSt
 		&i.FreqLimit,
 		&i.FreqWindow,
 		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
 	)
 	return i, err
 }
@@ -864,7 +1202,7 @@ UPDATE customers
 SET balance = balance + $2,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = $1
-RETURNING id, name, balance, currency, created_at, updated_at
+RETURNING id, name, balance, currency, created_at, updated_at, allowed_overdraft
 `
 
 type UpdateCustomerBalanceManagementParams struct {
@@ -882,6 +1220,123 @@ func (q *Queries) UpdateCustomerBalanceManagement(ctx context.Context, arg Updat
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedOverdraft,
+	)
+	return i, err
+}
+
+const updateCustomerOverdraft = `-- name: UpdateCustomerOverdraft :one
+UPDATE customers
+SET allowed_overdraft = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING id, name, balance, currency, created_at, updated_at, allowed_overdraft
+`
+
+type UpdateCustomerOverdraftParams struct {
+	ID               pgtype.UUID    `json:"id"`
+	AllowedOverdraft pgtype.Numeric `json:"allowed_overdraft"`
+}
+
+func (q *Queries) UpdateCustomerOverdraft(ctx context.Context, arg UpdateCustomerOverdraftParams) (Customer, error) {
+	row := q.db.QueryRow(ctx, updateCustomerOverdraft, arg.ID, arg.AllowedOverdraft)
+	var i Customer
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Balance,
+		&i.Currency,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AllowedOverdraft,
+	)
+	return i, err
+}
+
+const configureBrandFcap = `-- name: ConfigureBrandFcap :exec
+UPDATE advertiser_brands
+SET freq_limit = $2,
+    freq_window = $3,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+`
+
+type ConfigureBrandFcapParams struct {
+	ID         pgtype.UUID `json:"id"`
+	FreqLimit  int32       `json:"freq_limit"`
+	FreqWindow int32       `json:"freq_window"`
+}
+
+func (q *Queries) ConfigureBrandFcap(ctx context.Context, arg ConfigureBrandFcapParams) error {
+	_, err := q.db.Exec(ctx, configureBrandFcap, arg.ID, arg.FreqLimit, arg.FreqWindow)
+	return err
+}
+
+const getCampaignForUpdate = `-- name: GetCampaignForUpdate :one
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error) {
+	row := q.db.QueryRow(ctx, getCampaignForUpdate, id)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.BudgetLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CustomerID,
+		&i.CurrentSpend,
+		&i.DeletedAt,
+		&i.PacingMode,
+		&i.DailyBudget,
+		&i.Timezone,
+		&i.FreqLimit,
+		&i.FreqWindow,
+		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
+	)
+	return i, err
+}
+
+const updateCampaignPacing = `-- name: UpdateCampaignPacing :one
+UPDATE campaigns
+SET pacing_mode = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
+`
+
+type UpdateCampaignPacingParams struct {
+	ID         pgtype.UUID    `json:"id"`
+	PacingMode PacingModeType `json:"pacing_mode"`
+}
+
+func (q *Queries) UpdateCampaignPacing(ctx context.Context, arg UpdateCampaignPacingParams) (Campaign, error) {
+	row := q.db.QueryRow(ctx, updateCampaignPacing, arg.ID, arg.PacingMode)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.BudgetLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CustomerID,
+		&i.CurrentSpend,
+		&i.DeletedAt,
+		&i.PacingMode,
+		&i.DailyBudget,
+		&i.Timezone,
+		&i.FreqLimit,
+		&i.FreqWindow,
+		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
 	)
 	return i, err
 }

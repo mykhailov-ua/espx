@@ -154,6 +154,16 @@ type AdminAuditLog struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type AdvertiserBrand struct {
+	ID         pgtype.UUID        `json:"id"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	Name       string             `json:"name"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	FreqLimit  int32              `json:"freq_limit"`
+	FreqWindow int32              `json:"freq_window"`
+}
+
 type BalanceLedger struct {
 	ID              int64            `json:"id"`
 	CustomerID      pgtype.UUID      `json:"customer_id"`
@@ -182,7 +192,9 @@ type Campaign struct {
 	// Time window for frequency capping in seconds.
 	FreqWindow pgtype.Int4 `json:"freq_window"`
 	// Array of allowed ISO country codes. NULL or empty means all countries allowed.
-	TargetCountries []string `json:"target_countries"`
+	TargetCountries []string    `json:"target_countries"`
+	BrandID         pgtype.UUID `json:"brand_id"`
+	BrandFcapKey    string      `json:"brand_fcap_key"`
 }
 
 type CampaignStat struct {
@@ -203,12 +215,13 @@ type CampaignStatusHistory struct {
 }
 
 type Customer struct {
-	ID        pgtype.UUID        `json:"id"`
-	Name      string             `json:"name"`
-	Balance   pgtype.Numeric     `json:"balance"`
-	Currency  string             `json:"currency"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	ID               pgtype.UUID        `json:"id"`
+	Name             string             `json:"name"`
+	Balance          pgtype.Numeric     `json:"balance"`
+	Currency         string             `json:"currency"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	AllowedOverdraft pgtype.Numeric     `json:"allowed_overdraft"`
 }
 
 type Event struct {

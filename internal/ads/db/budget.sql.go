@@ -44,7 +44,7 @@ func (q *Queries) GetCampaignBudget(ctx context.Context, id pgtype.UUID) (GetCam
 }
 
 const getCustomerByID = `-- name: GetCustomerByID :one
-SELECT id, name, balance, currency, created_at, updated_at FROM customers WHERE id = $1 LIMIT 1
+SELECT id, name, balance, currency, created_at, updated_at, allowed_overdraft FROM customers WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) GetCustomerByID(ctx context.Context, id pgtype.UUID) (Customer, error) {
@@ -57,12 +57,13 @@ func (q *Queries) GetCustomerByID(ctx context.Context, id pgtype.UUID) (Customer
 		&i.Currency,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AllowedOverdraft,
 	)
 	return i, err
 }
 
 const listActiveCampaigns = `-- name: ListActiveCampaigns :many
-SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries FROM campaigns WHERE status = 'ACTIVE'
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns WHERE status = 'ACTIVE'
 `
 
 func (q *Queries) ListActiveCampaigns(ctx context.Context) ([]Campaign, error) {
@@ -90,6 +91,8 @@ func (q *Queries) ListActiveCampaigns(ctx context.Context) ([]Campaign, error) {
 			&i.FreqLimit,
 			&i.FreqWindow,
 			&i.TargetCountries,
+			&i.BrandID,
+			&i.BrandFcapKey,
 		); err != nil {
 			return nil, err
 		}

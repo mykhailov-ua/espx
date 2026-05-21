@@ -163,3 +163,85 @@ WHERE status = 'DRAINING' AND updated_at < $1
 ORDER BY updated_at ASC
 LIMIT $2
 FOR UPDATE SKIP LOCKED;
+
+-- name: ListCustomersForScoring :many
+SELECT 
+    c.id,
+    COALESCE(FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - c.created_at)) / 86400), 0)::integer AS age_days,
+    COALESCE(SUM(l.amount), 0.00)::numeric AS topup_sum_30d
+FROM customers c
+LEFT JOIN balance_ledger l ON l.customer_id = c.id 
+    AND l.type = 'TOPUP' 
+    AND l.created_at >= CURRENT_TIMESTAMP - INTERVAL '30 days'
+GROUP BY c.id;
+
+-- name: UpdateCustomerOverdraft :one
+UPDATE customers
+SET allowed_overdraft = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING *;
+
+-- name: CreateBrand :one
+INSERT INTO advertiser_brands (id, customer_id, name)
+VALUES ($1, $2, $3)
+RETURNING *;
+
+-- name: GetBrand :one
+SELECT * FROM advertiser_brands WHERE id = $1 LIMIT 1;
+
+-- name: GetBrandForUpdate :one
+SELECT * FROM advertiser_brands WHERE id = $1 LIMIT 1 FOR UPDATE;
+
+-- name: ConfigureBrandFcap :exec
+UPDATE advertiser_brands
+SET freq_limit = $2,
+    freq_window = $3,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1;
+
+-- name: ListBrandsByCustomer :many
+SELECT * FROM advertiser_brands
+WHERE customer_id = $1
+ORDER BY created_at DESC;
+
+-- name: GetCampaignsWithStats :many
+SELECT 
+    c.id, c.name, c.status, c.budget_limit, c.created_at, c.updated_at, c.customer_id, c.current_spend, c.deleted_at, c.pacing_mode, c.daily_budget, c.timezone, c.freq_limit, c.freq_window, c.target_countries, c.brand_id, c.brand_fcap_key,
+    COALESCE(SUM(s.impressions_count), 0)::bigint AS total_impressions,
+    COALESCE(SUM(s.clicks_count), 0)::bigint AS total_clicks,
+    COALESCE(SUM(s.conversions_count), 0)::bigint AS total_conversions
+FROM campaigns c
+LEFT JOIN campaign_stats s ON c.id = s.campaign_id
+WHERE c.customer_id = $1 AND c.status = 'ACTIVE'
+GROUP BY c.id;
+
+-- name: UpdateCampaignBudget :one
+UPDATE campaigns
+SET budget_limit = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING *;
+
+-- name: GetAllActiveCampaignsWithStats :many
+SELECT 
+    c.id, c.name, c.status, c.budget_limit, c.created_at, c.updated_at, c.customer_id, c.current_spend, c.deleted_at, c.pacing_mode, c.daily_budget, c.timezone, c.freq_limit, c.freq_window, c.target_countries, c.brand_id, c.brand_fcap_key,
+    COALESCE(SUM(s.impressions_count), 0)::bigint AS total_impressions,
+    COALESCE(SUM(s.clicks_count), 0)::bigint AS total_clicks,
+    COALESCE(SUM(s.conversions_count), 0)::bigint AS total_conversions
+FROM campaigns c
+LEFT JOIN campaign_stats s ON c.id = s.campaign_id
+WHERE c.status = 'ACTIVE'
+GROUP BY c.id;
+
+-- name: GetCampaignForUpdate :one
+SELECT * FROM campaigns
+WHERE id = $1
+FOR UPDATE;
+
+-- name: UpdateCampaignPacing :one
+UPDATE campaigns
+SET pacing_mode = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING *;

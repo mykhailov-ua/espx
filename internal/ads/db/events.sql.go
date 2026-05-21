@@ -12,9 +12,9 @@ import (
 )
 
 const createCampaign = `-- name: CreateCampaign :one
-INSERT INTO campaigns (id, name, budget_limit, status, customer_id, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries
+INSERT INTO campaigns (id, name, budget_limit, status, customer_id, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
 `
 
 type CreateCampaignParams struct {
@@ -29,6 +29,8 @@ type CreateCampaignParams struct {
 	FreqLimit       pgtype.Int4        `json:"freq_limit"`
 	FreqWindow      pgtype.Int4        `json:"freq_window"`
 	TargetCountries []string           `json:"target_countries"`
+	BrandID         pgtype.UUID        `json:"brand_id"`
+	BrandFcapKey    string             `json:"brand_fcap_key"`
 }
 
 func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error) {
@@ -44,6 +46,8 @@ func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) 
 		arg.FreqLimit,
 		arg.FreqWindow,
 		arg.TargetCountries,
+		arg.BrandID,
+		arg.BrandFcapKey,
 	)
 	var i Campaign
 	err := row.Scan(
@@ -62,12 +66,14 @@ func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) 
 		&i.FreqLimit,
 		&i.FreqWindow,
 		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
 	)
 	return i, err
 }
 
 const getCampaign = `-- name: GetCampaign :one
-SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries FROM campaigns WHERE id = $1 LIMIT 1
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns WHERE id = $1 LIMIT 1
 `
 
 func (q *Queries) GetCampaign(ctx context.Context, id pgtype.UUID) (Campaign, error) {
@@ -89,6 +95,8 @@ func (q *Queries) GetCampaign(ctx context.Context, id pgtype.UUID) (Campaign, er
 		&i.FreqLimit,
 		&i.FreqWindow,
 		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
 	)
 	return i, err
 }

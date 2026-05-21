@@ -17,20 +17,26 @@ type Querier interface {
 	CountCustomerLedger(ctx context.Context, customerID pgtype.UUID) (int64, error)
 	CountCustomers(ctx context.Context) (int64, error)
 	CountStatusHistory(ctx context.Context, campaignID pgtype.UUID) (int64, error)
+	ConfigureBrandFcap(ctx context.Context, arg ConfigureBrandFcapParams) error
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) (AdminAuditLog, error)
 	CreateBlacklistIP(ctx context.Context, arg CreateBlacklistIPParams) (IpBlacklist, error)
+	CreateBrand(ctx context.Context, arg CreateBrandParams) (AdvertiserBrand, error)
 	CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error)
 	CreateCustomer(ctx context.Context, arg CreateCustomerParams) (Customer, error)
 	CreateLedgerEntry(ctx context.Context, arg CreateLedgerEntryParams) (BalanceLedger, error)
 	CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventParams) (OutboxEvent, error)
 	CreateStatusHistory(ctx context.Context, arg CreateStatusHistoryParams) error
 	DeleteBlacklistIP(ctx context.Context, ip string) error
+	GetAllActiveCampaignsWithStats(ctx context.Context) ([]GetAllActiveCampaignsWithStatsRow, error)
 	GetAllBlacklist(ctx context.Context) ([]GetAllBlacklistRow, error)
 	GetAllSystemSettings(ctx context.Context) ([]GetAllSystemSettingsRow, error)
+	GetBrand(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error)
+	GetBrandForUpdate(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error)
 	GetCampaign(ctx context.Context, id pgtype.UUID) (Campaign, error)
 	GetCampaignBudget(ctx context.Context, id pgtype.UUID) (GetCampaignBudgetRow, error)
 	GetCampaignFull(ctx context.Context, id pgtype.UUID) (Campaign, error)
 	GetCampaignStats(ctx context.Context, campaignID pgtype.UUID) ([]CampaignStat, error)
+	GetCampaignsWithStats(ctx context.Context, customerID pgtype.UUID) ([]GetCampaignsWithStatsRow, error)
 	GetCustomerByID(ctx context.Context, id pgtype.UUID) (Customer, error)
 	GetCustomerForUpdate(ctx context.Context, id pgtype.UUID) (Customer, error)
 	GetCustomerStats(ctx context.Context, customerIds []pgtype.UUID) ([]GetCustomerStatsRow, error)
@@ -50,20 +56,26 @@ type Querier interface {
 	ListActiveCampaigns(ctx context.Context) ([]Campaign, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AdminAuditLog, error)
 	ListBlacklist(ctx context.Context, arg ListBlacklistParams) ([]IpBlacklist, error)
+	ListBrandsByCustomer(ctx context.Context, customerID pgtype.UUID) ([]AdvertiserBrand, error)
 	ListCampaignIDs(ctx context.Context) ([]pgtype.UUID, error)
 	ListCampaigns(ctx context.Context, arg ListCampaignsParams) ([]Campaign, error)
 	ListCustomerLedger(ctx context.Context, arg ListCustomerLedgerParams) ([]BalanceLedger, error)
 	ListCustomers(ctx context.Context, arg ListCustomersParams) ([]Customer, error)
+	ListCustomersForScoring(ctx context.Context) ([]ListCustomersForScoringRow, error)
 	ListStatusHistory(ctx context.Context, arg ListStatusHistoryParams) ([]CampaignStatusHistory, error)
 	MarkOutboxEventProcessed(ctx context.Context, id int64) error
 	SetSystemSetting(ctx context.Context, arg SetSystemSettingParams) error
 	SoftDeleteCampaign(ctx context.Context, id pgtype.UUID) error
+	UpdateCampaignBudget(ctx context.Context, arg UpdateCampaignBudgetParams) (Campaign, error)
 	UpdateCampaignSpend(ctx context.Context, arg UpdateCampaignSpendParams) error
 	UpdateCampaignStats(ctx context.Context, arg UpdateCampaignStatsParams) error
 	UpdateCampaignStatsBatch(ctx context.Context, arg UpdateCampaignStatsBatchParams) error
 	UpdateCampaignStatus(ctx context.Context, arg UpdateCampaignStatusParams) (Campaign, error)
 	UpdateCustomerBalance(ctx context.Context, arg UpdateCustomerBalanceParams) error
 	UpdateCustomerBalanceManagement(ctx context.Context, arg UpdateCustomerBalanceManagementParams) (Customer, error)
+	UpdateCustomerOverdraft(ctx context.Context, arg UpdateCustomerOverdraftParams) (Customer, error)
+	GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error)
+	UpdateCampaignPacing(ctx context.Context, arg UpdateCampaignPacingParams) (Campaign, error)
 }
 
 var _ Querier = (*Queries)(nil)
