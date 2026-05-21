@@ -74,9 +74,7 @@ func (p *StreamProducer) Process(evt *domain.Event) error {
 		Stream: p.streamName,
 		MaxLen: p.maxStreamLen,
 		Approx: true,
-		Values: map[string]interface{}{
-			"d": data,
-		},
+		Values: []interface{}{"d", data},
 	}).Result()
 
 	if err != nil {

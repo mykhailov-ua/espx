@@ -24,6 +24,7 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
@@ -31,7 +32,11 @@ import (
 
 var (
 	adEventPool = sync.Pool{
-		New: func() any { return &pb.AdEvent{} },
+		New: func() any {
+			return &pb.AdEvent{
+				Metadata: &pb.EventMetadata{},
+			}
+		},
 	}
 	trackResponsePool = sync.Pool{
 		New: func() any { return &pb.TrackResponse{} },
@@ -42,8 +47,10 @@ var (
 	fraudMapPool = sync.Pool{
 		New: func() any { return make(map[string]any, 9) },
 	}
-	statusStrings     [600]string
-	maxPoolObjectSize = 64 * 1024 // 64KB
+	statusStrings          [600]string
+	maxPoolObjectSize      = 64 * 1024 // 64KB
+	contentTypeProtoHeader = []string{"application/x-protobuf"}
+	contentTypeJsonHeader  = []string{"application/json"}
 )
 
 func init() {
@@ -65,9 +72,22 @@ func putAdEvent(evt *pb.AdEvent) {
 		return
 	}
 	if evt.Metadata != nil && (len(evt.Metadata.Extra) > 100 || cap(evt.Metadata.ExtraBytes) > 4096) {
+		evt.Reset()
+		adEventPool.Put(evt)
 		return
 	}
-	evt.Reset()
+	evt.CampaignId = ""
+	evt.EventType = ""
+	if evt.Metadata != nil {
+		evt.Metadata.ClickId = ""
+		evt.Metadata.UserId = ""
+		evt.Metadata.DeviceType = ""
+		evt.Metadata.Os = ""
+		for k := range evt.Metadata.Extra {
+			delete(evt.Metadata.Extra, k)
+		}
+		evt.Metadata.ExtraBytes = evt.Metadata.ExtraBytes[:0]
+	}
 	adEventPool.Put(evt)
 }
 
@@ -85,6 +105,12 @@ type Pinger interface {
 
 func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngine *FilterEngine, pool Pinger, rdbs []redis.UniversalClient, sharder Sharder, fraudStream string) http.Handler {
 	mux := http.NewServeMux()
+
+	trackDurationObserver := metrics.HttpRequestDuration.WithLabelValues("POST", "/track")
+	var trackStatusCounters [600]prometheus.Counter
+	for i := 0; i < 600; i++ {
+		trackStatusCounters[i] = metrics.HttpRequestsTotal.WithLabelValues("POST", "/track", statusStrings[i])
+	}
 
 	mux.Handle("GET /metrics", promhttp.Handler())
 
@@ -122,21 +148,28 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 
 		defer func() {
 			duration := time.Since(start).Seconds()
-			statusStr := "500"
-			if status >= 0 && status < len(statusStrings) {
-				statusStr = statusStrings[status]
+			if status >= 0 && status < 600 {
+				trackStatusCounters[status].Inc()
+			} else {
+				metrics.HttpRequestsTotal.WithLabelValues("POST", "/track", strconv.Itoa(status)).Inc()
 			}
-			metrics.HttpRequestsTotal.WithLabelValues("POST", "/track", statusStr).Inc()
-			metrics.HttpRequestDuration.WithLabelValues("POST", "/track").Observe(duration)
+			trackDurationObserver.Observe(duration)
 		}()
 
-		r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxRequestBodySize)
+		if r.ContentLength > cfg.MaxRequestBodySize {
+			slog.Warn("request body size exceeds limit", "size", r.ContentLength, "limit", cfg.MaxRequestBodySize)
+			status = http.StatusBadRequest
+			http.Error(w, "invalid body", status)
+			return
+		}
+		if r.ContentLength < 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxRequestBodySize)
+		}
 
 		id, _ := uuid.NewV7()
 		wReqID := bufPool.Get().(*bufWrapper)
 		wReqID.buf = wReqID.buf[:0]
 		wReqID.buf = appendUUID(wReqID.buf, id)
-		requestID := unsafeString(wReqID.buf)
 		defer bufPool.Put(wReqID)
 
 		var campaignID uuid.UUID
@@ -145,9 +178,13 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 		var payload []byte
 
 		ip := extractClientIP(r)
-		clickID := requestID
+		var clickID string
+		var requestIDStr string
 
-		contentType := r.Header.Get("Content-Type")
+		contentType := ""
+		if ctSlice := r.Header["Content-Type"]; len(ctSlice) > 0 {
+			contentType = ctSlice[0]
+		}
 		if contentType == "application/x-protobuf" || contentType == "" {
 			buf := bufferPool.Get().(*bytes.Buffer)
 			defer putBuffer(buf)
@@ -226,6 +263,11 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 			}
 		}
 
+		if clickID == "" {
+			requestIDStr = unsafeString(wReqID.buf)
+			clickID = requestIDStr
+		}
+
 		evt := domain.EventPool.Get().(*domain.Event)
 		evt.Reset()
 		evt.ClickID = clickID
@@ -234,11 +276,21 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 		evt.Type = eventType
 		evt.Payload = append(evt.Payload[:0], payload...)
 		evt.IP = ip
-		evt.UA = r.UserAgent()
+		ua := ""
+		if uaSlice := r.Header["User-Agent"]; len(uaSlice) > 0 {
+			ua = uaSlice[0]
+		}
+		evt.UA = ua
 
 		if filterEngine != nil {
 			if err := filterEngine.Check(r.Context(), evt); err != nil {
-				if errors.Is(err, ErrRateLimitExceeded) {
+				if errors.Is(err, ErrEmergencyBreakerActive) {
+					domain.EventPool.Put(evt)
+					slog.Warn("event rejected: emergency breaker active", "request_id", id)
+					metrics.FilterBlockedTotal.WithLabelValues("emergency_breaker").Inc()
+					http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
+					return
+				} else if errors.Is(err, ErrRateLimitExceeded) {
 					domain.EventPool.Put(evt)
 					slog.Warn("event rejected: rate limit", "error", err, "request_id", id)
 					metrics.FilterBlockedTotal.WithLabelValues("rate_limit").Inc()
@@ -305,7 +357,7 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 					m["fraud_reason"] = evt.FraudReason
 					m["created_at"] = timeStr
 
-					rdbErr := rdb.XAdd(r.Context(), &redis.XAddArgs{
+					rdbErr := rdb.XAdd(context.WithoutCancel(r.Context()), &redis.XAddArgs{
 						Stream: fraudStream,
 						MaxLen: int64(cfg.StreamMaxLen),
 						Approx: true,
@@ -337,11 +389,18 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 
 		domain.EventPool.Put(evt)
 
-		if r.Header.Get("Accept") == "application/x-protobuf" {
+		accept := ""
+		if accSlice := r.Header["Accept"]; len(accSlice) > 0 {
+			accept = accSlice[0]
+		}
+		if accept == "application/x-protobuf" {
 			resp := trackResponsePool.Get().(*pb.TrackResponse)
 			defer putTrackResponse(resp)
 
-			resp.RequestId = requestID
+			if requestIDStr == "" {
+				requestIDStr = unsafeString(wReqID.buf)
+			}
+			resp.RequestId = requestIDStr
 			resp.Status = "accepted"
 
 			buf := bufferPool.Get().(*bytes.Buffer)
@@ -353,18 +412,18 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			w.Header().Set("Content-Type", "application/x-protobuf")
+			w.Header()["Content-Type"] = contentTypeProtoHeader
 			w.WriteHeader(status)
 			w.Write(out)
 		} else {
-			w.Header().Set("Content-Type", "application/json")
+			w.Header()["Content-Type"] = contentTypeJsonHeader
 			w.WriteHeader(status)
 
 			buf := bufferPool.Get().(*bytes.Buffer)
 			defer putBuffer(buf)
 
 			buf.WriteString(`{"request_id":"`)
-			buf.WriteString(requestID)
+			buf.Write(wReqID.buf)
 			buf.WriteString(`","status":"accepted"}`)
 			w.Write(buf.Bytes())
 		}
@@ -374,7 +433,11 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 }
 
 func extractClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	var xff string
+	if xffSlice := r.Header["X-Forwarded-For"]; len(xffSlice) > 0 {
+		xff = xffSlice[0]
+	}
+	if xff != "" {
 		last := len(xff)
 		for i := len(xff) - 1; i >= -1; i-- {
 			if i == -1 || xff[i] == ',' {
@@ -407,9 +470,14 @@ func extractClientIP(r *http.Request) string {
 		}
 	}
 
-	remoteIP, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	addr := r.RemoteAddr
+	if idx := strings.LastIndexByte(addr, ':'); idx != -1 {
+		if idx > 0 && addr[idx-1] == ']' {
+			if addr[0] == '[' {
+				return addr[1 : idx-1]
+			}
+		}
+		return addr[:idx]
 	}
-	return remoteIP
+	return addr
 }
