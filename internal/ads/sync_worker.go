@@ -49,7 +49,6 @@ func (w *SyncWorker) Start(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				w.SyncAll(context.Background())
 				return
 			case <-ticker.C:
 				w.SyncAll(ctx)
