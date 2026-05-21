@@ -57,4 +57,45 @@ func TestNginxConfigWorker(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "1\n", string(flagContent))
 	})
+
+	t.Run("IPValidationAndInjectionPrevention", func(t *testing.T) {
+		worker := &NginxConfigWorker{exportPath: t.TempDir()}
+
+		ips := []string{
+			"1.2.3.4",
+			"5.6.7.8/24",
+			"10.0.0.999",                                         // invalid IP
+			"1.2.3.4;\ninclude /etc/nginx/nginx.conf;\n#",       // injection payload
+			"2001:db8::1",                                        // IPv6
+			"2001:db8::/32",                                      // IPv6 CIDR
+		}
+
+		err := worker.writeDenyFile("test_validation.conf", ips)
+		require.NoError(t, err)
+
+		contentBytes, err := os.ReadFile(filepath.Join(worker.exportPath, "test_validation.conf"))
+		require.NoError(t, err)
+		content := string(contentBytes)
+
+		assert.Contains(t, content, "deny 1.2.3.4;\n")
+		assert.Contains(t, content, "deny 5.6.7.8/24;\n")
+		assert.Contains(t, content, "deny 2001:db8::1;\n")
+		assert.Contains(t, content, "deny 2001:db8::/32;\n")
+
+		assert.NotContains(t, content, "10.0.0.999")
+		assert.NotContains(t, content, "include")
+	})
+}
+
+func BenchmarkNginxConfigWorker_writeDenyFile(b *testing.B) {
+	worker := &NginxConfigWorker{exportPath: b.TempDir()}
+	ips := make([]string, 1000)
+	for i := 0; i < 1000; i++ {
+		ips[i] = "192.168.1.1"
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = worker.writeDenyFile("test.conf", ips)
+	}
 }

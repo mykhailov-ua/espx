@@ -47,7 +47,7 @@ func TestRegistryWatch(t *testing.T) {
 	customerID := uuid.New()
 	_ = svc.CreateCustomer(ctx, customerID, "Sync db.User", decimal.NewFromInt(1000), "USD")
 
-	campaignID, err := svc.CreateCampaign(ctx, customerID, "Sync Camp", decimal.NewFromInt(100), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-sync")
+	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Sync Camp", decimal.NewFromInt(100), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-sync")
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {

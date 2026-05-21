@@ -1,0 +1,244 @@
+package management
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
+	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	redis "github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestBrandFrequencyCapping executes the functional verification flow of brand grouping and joint capping behavior.
+// It creates a customer, registers a brand profile, provisions multiple campaigns sharing that brand identity, and checks the shared frequency cap bounds.
+func TestBrandFrequencyCapping(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	pool, cleanupDB := database.SetupTestDB(t)
+	defer cleanupDB()
+
+	rdb, cleanupRedis := database.SetupTestRedis(t)
+	defer cleanupRedis()
+
+	cfg := &config.Config{
+		AdminAPIKey: "test-secret",
+	}
+
+	svc := NewService(pool, []redis.UniversalClient{rdb}, nil, cfg)
+	defer svc.Close()
+	h := NewHandler(svc, cfg, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	ctx := context.Background()
+	custID := uuid.New()
+	err := svc.CreateCustomer(ctx, custID, "Brand Owner", decimal.NewFromFloat(1000.00), "USD")
+	require.NoError(t, err)
+
+	// 1. Create a brand group via REST API
+	brandReq := map[string]any{
+		"customer_id": custID.String(),
+		"name":        "Nike Group",
+	}
+	brandReqBytes, _ := json.Marshal(brandReq)
+	req, _ := http.NewRequest("POST", "/admin/brands", bytes.NewReader(brandReqBytes))
+	req.Header.Set("X-Admin-API-Key", "test-secret")
+	resp := httptest.NewRecorder()
+	mux.ServeHTTP(resp, req)
+	require.Equal(t, http.StatusCreated, resp.Code)
+
+	var brandResp struct {
+		ID string `json:"id"`
+	}
+	err = json.NewDecoder(resp.Body).Decode(&brandResp)
+	require.NoError(t, err)
+	brandID, err := uuid.Parse(brandResp.ID)
+	require.NoError(t, err)
+
+	// Verify Listing Brand via REST API
+	reqList, _ := http.NewRequest("GET", "/admin/brands?customer_id="+custID.String(), nil)
+	reqList.Header.Set("X-Admin-API-Key", "test-secret")
+	respList := httptest.NewRecorder()
+	mux.ServeHTTP(respList, reqList)
+	require.Equal(t, http.StatusOK, respList.Code)
+
+	var listResp []BrandDTO
+	err = json.NewDecoder(respList.Body).Decode(&listResp)
+	require.NoError(t, err)
+	require.Len(t, listResp, 1)
+	assert.Equal(t, brandResp.ID, listResp[0].ID)
+	assert.Equal(t, custID.String(), listResp[0].CustomerID)
+	assert.Equal(t, "Nike Group", listResp[0].Name)
+
+	// Configure Brand-level frequency cap via REST API
+	fcapReq := map[string]any{
+		"freq_limit":  3,
+		"freq_window": 3600,
+	}
+	fcapReqBytes, _ := json.Marshal(fcapReq)
+	reqFcap, _ := http.NewRequest("POST", "/admin/brands/"+brandResp.ID+"/fcap", bytes.NewReader(fcapReqBytes))
+	reqFcap.Header.Set("X-Admin-API-Key", "test-secret")
+	respFcap := httptest.NewRecorder()
+	mux.ServeHTTP(respFcap, reqFcap)
+	require.Equal(t, http.StatusOK, respFcap.Code)
+
+	// Verify persistence in PostgreSQL
+	var dbLimit, dbWindow int32
+	err = pool.QueryRow(ctx, "SELECT freq_limit, freq_window FROM advertiser_brands WHERE id = $1", brandID).Scan(&dbLimit, &dbWindow)
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), dbLimit)
+	assert.Equal(t, int32(3600), dbWindow)
+
+	// Verify administrative audit log is created
+	var auditCount int64
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM admin_audit_log WHERE action = 'CONFIGURE_BRAND_FCAP' AND target_id = $1", brandID).Scan(&auditCount)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), auditCount)
+
+	// Verify Outbox Event is emitted
+	var outboxCount int64
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'CONFIGURE_BRAND_FCAP'").Scan(&outboxCount)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), outboxCount)
+
+	// 2. Create two campaigns under the same brand via REST API
+	campAReq := map[string]any{
+		"customer_id":      custID.String(),
+		"brand_id":         brandResp.ID,
+		"name":             "Air Max Run",
+		"budget_limit":     100.00,
+		"daily_budget":     10.00,
+		"freq_limit":       2,
+		"freq_window":      3600,
+		"target_countries": []string{"US"},
+	}
+	campAReqBytes, _ := json.Marshal(campAReq)
+	reqA, _ := http.NewRequest("POST", "/admin/campaigns", bytes.NewReader(campAReqBytes))
+	reqA.Header.Set("X-Admin-API-Key", "test-secret")
+	respA := httptest.NewRecorder()
+	mux.ServeHTTP(respA, reqA)
+	require.Equal(t, http.StatusCreated, respA.Code)
+
+	var campAResp struct {
+		ID string `json:"id"`
+	}
+	err = json.NewDecoder(respA.Body).Decode(&campAResp)
+	require.NoError(t, err)
+	campAID, err := uuid.Parse(campAResp.ID)
+	require.NoError(t, err)
+
+	campBReq := map[string]any{
+		"customer_id":      custID.String(),
+		"brand_id":         brandResp.ID,
+		"name":             "Air Max Walk",
+		"budget_limit":     150.00,
+		"daily_budget":     15.00,
+		"freq_limit":       2,
+		"freq_window":      3600,
+		"target_countries": []string{"US"},
+	}
+	campBReqBytes, _ := json.Marshal(campBReq)
+	reqB, _ := http.NewRequest("POST", "/admin/campaigns", bytes.NewReader(campBReqBytes))
+	reqB.Header.Set("X-Admin-API-Key", "test-secret")
+	respB := httptest.NewRecorder()
+	mux.ServeHTTP(respB, reqB)
+	require.Equal(t, http.StatusCreated, respB.Code)
+
+	var campBResp struct {
+		ID string `json:"id"`
+	}
+	err = json.NewDecoder(respB.Body).Decode(&campBResp)
+	require.NoError(t, err)
+	campBID, err := uuid.Parse(campBResp.ID)
+	require.NoError(t, err)
+
+	// Verify database columns are stored correctly
+	var brandFcapKeyA, brandFcapKeyB string
+	var brandIDDbA, brandIDDbB uuid.UUID
+	err = pool.QueryRow(ctx, "SELECT brand_id, brand_fcap_key FROM campaigns WHERE id = $1", campAID).Scan(&brandIDDbA, &brandFcapKeyA)
+	require.NoError(t, err)
+	err = pool.QueryRow(ctx, "SELECT brand_id, brand_fcap_key FROM campaigns WHERE id = $1", campBID).Scan(&brandIDDbB, &brandFcapKeyB)
+	require.NoError(t, err)
+
+	expectedFcapKey := "fcap:b:" + brandResp.ID
+	assert.Equal(t, brandID, brandIDDbA)
+	assert.Equal(t, brandID, brandIDDbB)
+	assert.Equal(t, expectedFcapKey, brandFcapKeyA)
+	assert.Equal(t, expectedFcapKey, brandFcapKeyB)
+
+	// 3. Verify brand-level frequency capping behavior via ads.UnifiedFilter
+	queries := db.New(pool)
+	registry := ads.NewRegistry(queries)
+	_, err = registry.Sync(ctx)
+	require.NoError(t, err)
+
+	sharder := ads.NewJumpHashSharder(1)
+	filter := ads.NewUnifiedFilter(
+		[]redis.UniversalClient{rdb},
+		sharder,
+		registry,
+		nil, // no repo needed since budget won't miss in this test scenario
+		100, // high rate limit so it doesn't trigger
+		time.Minute,
+		time.Hour,
+		time.Hour,
+		decimal.NewFromFloat(0.10),
+		decimal.NewFromFloat(0.01),
+		"events-stream",
+		10000,
+	)
+
+	// Set campaign budgets in Redis to avoid Postgres budget loader fallback
+	rdb.Set(ctx, "budget:campaign:"+campAID.String(), 1000000000, 0)
+	rdb.Set(ctx, "budget:campaign:"+campBID.String(), 1000000000, 0)
+
+	evtUser1A := &domain.Event{
+		CampaignID: campAID,
+		Type:       "click",
+		ClickID:    "click_u1_a1",
+		UserID:     "user_1",
+		IP:         "1.1.1.1",
+	}
+
+	evtUser1B := &domain.Event{
+		CampaignID: campBID,
+		Type:       "click",
+		ClickID:    "click_u1_b1",
+		UserID:     "user_1",
+		IP:         "1.1.1.1",
+	}
+
+	evtUser1ASecond := &domain.Event{
+		CampaignID: campAID,
+		Type:       "click",
+		ClickID:    "click_u1_a2",
+		UserID:     "user_1",
+		IP:         "1.1.1.1",
+	}
+
+	// First event on Campaign A (brand Nike, user_1) -> Success (count=1)
+	err = filter.Check(ctx, evtUser1A)
+	assert.NoError(t, err)
+
+	// Second event on Campaign B (brand Nike, user_1) -> Success (count=2)
+	err = filter.Check(ctx, evtUser1B)
+	assert.NoError(t, err)
+
+	// Third event on Campaign A (brand Nike, user_1) -> Fails with FreqLimitExceeded (limit=2)
+	err = filter.Check(ctx, evtUser1ASecond)
+	assert.ErrorIs(t, err, ads.ErrFreqLimitExceeded)
+}

@@ -121,3 +121,38 @@ func TestAuthMiddleware(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkAuthMiddleware(b *testing.B) {
+	tokenMaker, err := NewPasetoMaker("12345678901234567890123456789012")
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	userID := uuid.New()
+	sessionID := uuid.New()
+	role := "admin"
+	customerID := uuid.New()
+	token, err := tokenMaker.CreateToken(userID, sessionID, role, customerID, time.Hour)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	handler := AuthMiddleware(tokenMaker, nil, "admin")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req, err := http.NewRequest(http.MethodGet, "/auth", nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	req.Header.Set(authorizationHeaderKey, fmt.Sprintf("%s %s", authorizationTypeBearer, token))
+
+	rec := httptest.NewRecorder()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		handler.ServeHTTP(rec, req)
+		rec.Body.Reset()
+	}
+}
+

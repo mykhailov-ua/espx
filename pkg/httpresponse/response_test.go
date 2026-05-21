@@ -40,3 +40,23 @@ func TestError(t *testing.T) {
 	expected := `{"error":{"code":"INVALID_INPUT","message":"missing field"}}`
 	assert.Equal(t, expected+"\n", rec.Body.String())
 }
+
+func BenchmarkJSON(b *testing.B) {
+	rec := httptest.NewRecorder()
+	data := map[string]string{"foo": "bar"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		JSON(rec, http.StatusOK, data)
+		rec.Body.Reset()
+	}
+}
+
+func BenchmarkError(b *testing.B) {
+	rec := httptest.NewRecorder()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Error(rec, http.StatusBadRequest, "INVALID_INPUT", "missing field")
+		rec.Body.Reset()
+	}
+}
+

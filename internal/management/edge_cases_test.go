@@ -35,7 +35,7 @@ func TestEdge_RoundingAndSmallAmounts(t *testing.T) {
 	_ = svc.CreateCustomer(context.Background(), customerID, "Small Saver", decimal.NewFromFloat(100.0), "USD")
 
 	budget := decimal.NewFromFloat(1.05)
-	id, err := svc.CreateCampaign(context.Background(), customerID, "Tiny Camp", budget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-1")
+	id, err := svc.CreateCampaign(context.Background(), customerID, nil, "Tiny Camp", budget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-1")
 	require.NoError(t, err)
 
 	err = svc.CancelCampaign(context.Background(), id, "Too small")
@@ -70,7 +70,7 @@ func TestEdge_ConcurrentBalanceDepletion(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			_, err := svc.CreateCampaign(context.Background(), customerID, fmt.Sprintf("Camp-%d", idx), campaignBudget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, fmt.Sprintf("idemp-%d", idx))
+			_, err := svc.CreateCampaign(context.Background(), customerID, nil, fmt.Sprintf("Camp-%d", idx), campaignBudget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, fmt.Sprintf("idemp-%d", idx))
 			results <- err
 		}(i)
 	}
@@ -105,7 +105,7 @@ func TestEdge_ResumingStuckSettlement(t *testing.T) {
 
 	customerID := uuid.New()
 	_ = svc.CreateCustomer(context.Background(), customerID, "Crash Test", decimal.NewFromFloat(1000.0), "USD")
-	campaignID, _ := svc.CreateCampaign(context.Background(), customerID, "Zombie", decimal.NewFromFloat(500.0), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-crash")
+	campaignID, _ := svc.CreateCampaign(context.Background(), customerID, nil, "Zombie", decimal.NewFromFloat(500.0), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-crash")
 
 	_, _ = pool.Exec(context.Background(), "UPDATE campaigns SET status = 'DRAINING' WHERE id = $1", campaignID)
 

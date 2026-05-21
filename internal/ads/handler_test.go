@@ -1,10 +1,6 @@
 package ads
 
 import (
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
-)
-
-import (
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/shopspring/decimal"
@@ -22,15 +19,24 @@ import (
 type mockRegistry struct{}
 
 func (m *mockRegistry) Exists(id uuid.UUID) bool { return true }
-func (m *mockRegistry) Add(id, customerID uuid.UUID, pacingMode domain.PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string) {
+func (m *mockRegistry) Add(id, customerID uuid.UUID, brandID *uuid.UUID, brandFcapKey string, pacingMode domain.PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string) {
 }
 func (m *mockRegistry) GetCustomerID(id uuid.UUID) (uuid.UUID, bool) { return uuid.Nil, true }
+var staticCampaign = &domain.Campaign{CustomerID: uuid.Nil, Location: time.UTC}
+
 func (m *mockRegistry) GetCampaign(id uuid.UUID) (*domain.Campaign, bool) {
-	return &domain.Campaign{ID: id, CustomerID: uuid.Nil, Location: time.UTC}, true
+	staticCampaign.ID = id
+	return staticCampaign, true
 }
 func (m *mockRegistry) Sync(ctx context.Context) (int, error)                 { return 0, nil }
 func (m *mockRegistry) StartSync(ctx context.Context, interval time.Duration) {}
 func (m *mockRegistry) Wait(ctx context.Context) error                        { return nil }
+
+type mockBody struct {
+	*bytes.Reader
+}
+
+func (m mockBody) Close() error { return nil }
 
 func BenchmarkTrackHandlerJSON(b *testing.B) {
 	cfg := &config.Config{
@@ -50,10 +56,17 @@ func BenchmarkTrackHandlerJSON(b *testing.B) {
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		req := httptest.NewRequest("POST", "/track", nil)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		reader := bytes.NewReader(body)
+		req.Body = mockBody{Reader: reader}
+
 		for pb.Next() {
-			req := httptest.NewRequest("POST", "/track", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
+			reader.Reset(body)
+			w.Body.Reset()
+			w.Code = 0
+
 			handler.ServeHTTP(w, req)
 		}
 	})
@@ -78,11 +91,19 @@ func BenchmarkTrackHandlerProto(b *testing.B) {
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
+		req := httptest.NewRequest("POST", "/track", nil)
+		req.Header.Set("Content-Type", "application/x-protobuf")
+		w := httptest.NewRecorder()
+		reader := bytes.NewReader(body)
+		req.Body = mockBody{Reader: reader}
+
 		for pb.Next() {
-			req := httptest.NewRequest("POST", "/track", bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/x-protobuf")
-			w := httptest.NewRecorder()
+			reader.Reset(body)
+			w.Body.Reset()
+			w.Code = 0
+
 			handler.ServeHTTP(w, req)
 		}
 	})
 }
+

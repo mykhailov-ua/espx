@@ -48,6 +48,7 @@ func TestManagementAPI_Campaigns(t *testing.T) {
 	campID, err := svc.CreateCampaign(
 		context.Background(),
 		custID,
+		nil,
 		"Spring Sale",
 		decimal.NewFromFloat(100.00),
 		db.PacingModeTypeEVEN,
