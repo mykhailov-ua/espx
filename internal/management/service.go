@@ -41,7 +41,7 @@ func NewService(pool *pgxpool.Pool, rdbs []redis.UniversalClient, sharder ads.Sh
 		ctx:     ctx,
 		cancel:  cancel,
 	}
-	s.wg.Add(2)
+	s.wg.Add(3)
 	w := NewOutboxWorker(s)
 	go func() {
 		defer s.wg.Done()
@@ -51,6 +51,11 @@ func NewService(pool *pgxpool.Pool, rdbs []redis.UniversalClient, sharder ads.Sh
 	go func() {
 		defer s.wg.Done()
 		dw.Start(ctx, 20*time.Millisecond)
+	}()
+	csw := NewCreditScoringWorker(s)
+	go func() {
+		defer s.wg.Done()
+		csw.Start(ctx, 24*time.Hour)
 	}()
 	return s
 }
@@ -119,7 +124,7 @@ func (s *Service) TopUpBalance(ctx context.Context, customerID uuid.UUID, amount
 
 // CreateCampaign validates customer solvency and freezes the initial campaign budget within a single ACID transaction.
 // The budget limit is subsequently synchronized to the sharded Redis cluster to enable low-latency pacing evaluation at the edge.
-func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, name string, budgetLimit decimal.Decimal, pacingMode db.PacingModeType, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string, idempotencyKey string) (uuid.UUID, error) {
+func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, brandID *uuid.UUID, name string, budgetLimit decimal.Decimal, pacingMode db.PacingModeType, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string, idempotencyKey string) (uuid.UUID, error) {
 	campaignID, _ := uuid.NewV7()
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
@@ -133,9 +138,25 @@ func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, name
 		if err != nil {
 			return fmt.Errorf("customer not found: %w", err)
 		}
-		if ads.FromNumeric(cust.Balance).LessThan(budgetLimit) {
+		availableBalance := ads.FromNumeric(cust.Balance).Add(ads.FromNumeric(cust.AllowedOverdraft))
+		if availableBalance.LessThan(budgetLimit) {
 			return fmt.Errorf("insufficient balance")
 		}
+
+		var brandIDParam pgtype.UUID
+		brandFcapKey := "fcap:c:" + campaignID.String()
+		if brandID != nil {
+			brand, err := q.GetBrand(ctx, ads.ToUUID(*brandID))
+			if err != nil {
+				return fmt.Errorf("brand not found: %w", err)
+			}
+			if uuid.UUID(brand.CustomerID.Bytes) != customerID {
+				return fmt.Errorf("brand belongs to another customer")
+			}
+			brandIDParam = ads.ToUUID(*brandID)
+			brandFcapKey = "fcap:b:" + brandID.String()
+		}
+
 		_, err = q.UpdateCustomerBalanceManagement(ctx, db.UpdateCustomerBalanceManagementParams{
 			ID:      ads.ToUUID(customerID),
 			Balance: ads.ToNumeric(budgetLimit.Neg()),
@@ -155,6 +176,8 @@ func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, name
 			FreqLimit:       pgtype.Int4{Int32: freqLimit, Valid: true},
 			FreqWindow:      pgtype.Int4{Int32: freqWindow, Valid: true},
 			TargetCountries: targetCountries,
+			BrandID:          brandIDParam,
+			BrandFcapKey:     brandFcapKey,
 		})
 		if err != nil {
 			return err
@@ -230,7 +253,12 @@ func (s *Service) CancelCampaign(ctx context.Context, campaignID uuid.UUID, reas
 func (s *Service) FinalizeCancelledCampaign(ctx context.Context, campaignID uuid.UUID, reason string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
-		camp, err := q.GetCampaignFull(ctx, ads.ToUUID(campaignID))
+		var camp db.Campaign
+		err := tx.QueryRow(ctx, `
+			SELECT status, budget_limit, current_spend, customer_id 
+			FROM campaigns 
+			WHERE id = $1 
+			FOR UPDATE`, ads.ToUUID(campaignID)).Scan(&camp.Status, &camp.BudgetLimit, &camp.CurrentSpend, &camp.CustomerID)
 		if err != nil {
 			return err
 		}
@@ -308,5 +336,110 @@ func (s *Service) ListAuditLogs(ctx context.Context, limit, offset int32) ([]db.
 	return db.New(s.pool).ListAuditLogs(ctx, db.ListAuditLogsParams{
 		Limit:  limit,
 		Offset: offset,
+	})
+}
+
+// UpdateOverdraft updates a customer's allowed overdraft inside a database transaction and records audit trail.
+func (s *Service) UpdateOverdraft(ctx context.Context, id uuid.UUID, newOverdraft, oldOverdraft decimal.Decimal) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		q := db.New(tx)
+		cust, err := q.GetCustomerForUpdate(ctx, ads.ToUUID(id))
+		if err != nil {
+			return fmt.Errorf("failed to fetch customer for overdraft update: %w", err)
+		}
+
+		if newOverdraft.LessThan(oldOverdraft) {
+			availableLimit := ads.FromNumeric(cust.Balance).Add(newOverdraft)
+			if availableLimit.IsNegative() {
+				camps, err := q.ListCampaigns(ctx, db.ListCampaignsParams{
+					Limit:      10000,
+					Offset:     0,
+					CustomerID: ads.ToUUID(id),
+					Status:     pgtype.Text{String: string(db.CampaignStatusTypeACTIVE), Valid: true},
+				})
+				if err != nil {
+					return fmt.Errorf("failed to list active campaigns for overdraft decrease: %w", err)
+				}
+
+				for _, c := range camps {
+					if availableLimit.GreaterThanOrEqual(decimal.Zero) {
+						break
+					}
+
+					_, err = q.UpdateCampaignStatus(ctx, db.UpdateCampaignStatusParams{
+						ID:     c.ID,
+						Status: db.CampaignStatusTypePAUSED,
+					})
+					if err != nil {
+						return fmt.Errorf("failed to pause campaign: %w", err)
+					}
+
+					err = q.CreateStatusHistory(ctx, db.CreateStatusHistoryParams{
+						CampaignID: c.ID,
+						OldStatus:  db.NullCampaignStatusType{CampaignStatusType: db.CampaignStatusTypeACTIVE, Valid: true},
+						NewStatus:  db.CampaignStatusTypePAUSED,
+						Reason:     pgtype.Text{String: "Overdraft reduced, campaign suspended", Valid: true},
+					})
+					if err != nil {
+						return fmt.Errorf("failed to write status history: %w", err)
+					}
+
+					budgetLimit := ads.FromNumeric(c.BudgetLimit)
+					currentSpend := ads.FromNumeric(c.CurrentSpend)
+					remaining := budgetLimit.Sub(currentSpend)
+					if remaining.IsNegative() {
+						remaining = decimal.Zero
+					}
+
+					if remaining.IsPositive() {
+						_, err = q.UpdateCustomerBalanceManagement(ctx, db.UpdateCustomerBalanceManagementParams{
+							ID:      ads.ToUUID(id),
+							Balance: ads.ToNumeric(remaining),
+						})
+						if err != nil {
+							return fmt.Errorf("failed to refund balance for suspended campaign: %w", err)
+						}
+
+						_, err = q.CreateLedgerEntry(ctx, db.CreateLedgerEntryParams{
+							CustomerID: ads.ToUUID(id),
+							CampaignID: c.ID,
+							Amount:     ads.ToNumeric(remaining),
+							Type:       db.LedgerTypeRELEASE,
+						})
+						if err != nil {
+							return fmt.Errorf("failed to record release ledger entry: %w", err)
+						}
+
+						availableLimit = availableLimit.Add(remaining)
+					}
+
+					payloadBytes, _ := json.Marshal(CampaignPayload{CampaignID: uuid.UUID(c.ID.Bytes).String()})
+					_, err = q.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{
+						EventType: "CANCEL_CAMPAIGN",
+						Payload:   payloadBytes,
+					})
+					if err != nil {
+						return fmt.Errorf("failed to emit outbox event for paused campaign: %w", err)
+					}
+
+					campID := uuid.UUID(c.ID.Bytes)
+					s.AuditLog(ctx, q, uuid.Nil, "SUSPEND_CAMPAIGN", "campaign", &campID, map[string]any{"reason": "overdraft_reduced"}, nil)
+				}
+			}
+		}
+
+		_, err = q.UpdateCustomerOverdraft(ctx, db.UpdateCustomerOverdraftParams{
+			ID:               ads.ToUUID(id),
+			AllowedOverdraft: ads.ToNumeric(newOverdraft),
+		})
+		if err != nil {
+			return err
+		}
+
+		s.AuditLog(ctx, q, uuid.Nil, "UPDATE_CUSTOMER_OVERDRAFT", "customer", &id, map[string]any{
+			"old_overdraft": oldOverdraft.StringFixed(2),
+			"new_overdraft": newOverdraft.StringFixed(2),
+		}, nil)
+		return nil
 	})
 }
