@@ -28,6 +28,8 @@ type Campaign struct {
 	IDStr            string
 	CustomerID       uuid.UUID
 	CustomerIDStr    string
+	BrandID          *uuid.UUID
+	BrandFcapKey     string
 	Name             string
 	BudgetLimit      decimal.Decimal
 	CurrentSpend     decimal.Decimal
@@ -42,6 +44,14 @@ type Campaign struct {
 	TargetCountries  []string
 }
 
+type Brand struct {
+	ID         uuid.UUID
+	CustomerID uuid.UUID
+	Name       string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
 type CampaignRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*Campaign, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status CampaignStatus) error
@@ -51,7 +61,7 @@ type CampaignRepository interface {
 
 type CampaignRegistry interface {
 	Exists(id uuid.UUID) bool
-	Add(id, customerID uuid.UUID, pacingMode PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string)
+	Add(id, customerID uuid.UUID, brandID *uuid.UUID, brandFcapKey string, pacingMode PacingMode, dailyBudget decimal.Decimal, timezone string, freqLimit, freqWindow int32, targetCountries []string)
 	GetCustomerID(id uuid.UUID) (uuid.UUID, bool)
 	GetCampaign(id uuid.UUID) (*Campaign, bool)
 	Sync(ctx context.Context) (int, error)
