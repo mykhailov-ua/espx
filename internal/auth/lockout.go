@@ -144,9 +144,9 @@ func (l *LockoutLimiter) AllowIP(ctx context.Context, clientIP string, limit int
 
 // Allow evaluates both IP-based and global rate limits. Returns 1 for allowed, 0 for IP-locked, -1 for globally locked.
 func (l *LockoutLimiter) Allow(ctx context.Context, clientIP, email string, maxAttempts int, lockoutDuration, attemptWindow time.Duration) (int64, error) {
-	failKey := "lockout:ip_email:" + clientIP + ":" + email
-	inflightKey := "lockout:inflight:" + clientIP + ":" + email
-	globalFailKey := "lockout:global_email:" + email
+	failKey := "lockout:ip_email:" + clientIP + ":{" + email + "}"
+	inflightKey := "lockout:inflight:" + clientIP + ":{" + email + "}"
+	globalFailKey := "lockout:global_email:{" + email + "}"
 	res, err := l.rdb.Eval(ctx, lockoutScript, []string{failKey, inflightKey, globalFailKey}, maxAttempts, int(lockoutDuration.Seconds()), int(attemptWindow.Seconds()), MaxGlobalAttempts).Result()
 	if err != nil {
 		return 0, err
@@ -155,15 +155,15 @@ func (l *LockoutLimiter) Allow(ctx context.Context, clientIP, email string, maxA
 }
 
 func (l *LockoutLimiter) DecrementInflight(ctx context.Context, clientIP, email string) error {
-	key := "lockout:inflight:" + clientIP + ":" + email
+	key := "lockout:inflight:" + clientIP + ":{" + email + "}"
 	_, err := l.rdb.Eval(ctx, decrInflightScript, []string{key}).Result()
 	return err
 }
 
 // Increment increases both IP-based and global failure counters. Returns -1 if global limit is reached.
 func (l *LockoutLimiter) Increment(ctx context.Context, clientIP, email string, maxAttempts int, lockoutDuration, attemptWindow time.Duration) (int64, error) {
-	key := "lockout:ip_email:" + clientIP + ":" + email
-	globalKey := "lockout:global_email:" + email
+	key := "lockout:ip_email:" + clientIP + ":{" + email + "}"
+	globalKey := "lockout:global_email:{" + email + "}"
 	res, err := l.rdb.Eval(ctx, incrementScript, []string{key, globalKey}, maxAttempts, int(lockoutDuration.Seconds()), int(attemptWindow.Seconds()), MaxGlobalAttempts, GlobalLockoutDuration).Result()
 	if err != nil {
 		return 0, err
@@ -172,6 +172,6 @@ func (l *LockoutLimiter) Increment(ctx context.Context, clientIP, email string, 
 }
 
 func (l *LockoutLimiter) Reset(ctx context.Context, clientIP, email string) error {
-	key := "lockout:ip_email:" + clientIP + ":" + email
+	key := "lockout:ip_email:" + clientIP + ":{" + email + "}"
 	return l.rdb.Del(ctx, key).Err()
 }

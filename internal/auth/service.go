@@ -76,7 +76,13 @@ type Service struct {
 
 func NewService(repo db.Store, tokenMaker Maker, hasher *PasswordHasher, lockout *LockoutLimiter, rdb redis.UniversalClient) *Service {
 	gomaxprocs := runtime.GOMAXPROCS(0)
-	cryptoLimit := gomaxprocs - 1
+	p := 1
+	if hasher != nil {
+		if ph := hasher.GetParallelism(); ph > 0 {
+			p = int(ph)
+		}
+	}
+	cryptoLimit := gomaxprocs / p
 	if cryptoLimit < 1 {
 		cryptoLimit = 1
 	}
@@ -488,7 +494,14 @@ func (s *Service) RevokeToken(ctx context.Context, refreshTokenStr string) error
 	session, err := s.repo.GetSessionByRefreshToken(ctx, refreshTokenStr)
 	if err == nil && s.rdb != nil {
 		sessionID := uuid.UUID(session.ID.Bytes).String()
-		if errSet := s.rdb.Set(ctx, "revoked:session:"+sessionID, "1", 24*time.Hour).Err(); errSet != nil {
+		ttl := 24 * time.Hour
+		if session.ExpiresAt.Valid {
+			ttl = time.Until(session.ExpiresAt.Time)
+		}
+		if ttl <= 0 {
+			ttl = 24 * time.Hour
+		}
+		if errSet := s.rdb.Set(ctx, "revoked:session:"+sessionID, "1", ttl).Err(); errSet != nil {
 			slog.Error("failed to set revoked session in redis", slog.String("session_id", sessionID), slog.Any("error", errSet))
 		}
 	}

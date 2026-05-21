@@ -5,14 +5,31 @@ import ()
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
+
+var tokenCache sync.Map
+
+func verifyWithCache(tokenMaker Maker, token string) (*Payload, error) {
+	if cached, ok := tokenCache.Load(token); ok {
+		payload := cached.(*Payload)
+		if payload.Valid() == nil {
+			return payload, nil
+		}
+		tokenCache.Delete(token)
+	}
+	payload, err := tokenMaker.VerifyToken(token)
+	if err == nil {
+		tokenCache.Store(token, payload)
+	}
+	return payload, err
+}
 
 type contextKey string
 
@@ -35,22 +52,14 @@ func AuthMiddleware(tokenMaker Maker, rdb redis.UniversalClient, allowedRoles ..
 				return
 			}
 
-			fields := strings.Fields(authorizationHeader)
-			if len(fields) < 2 {
+			if len(authorizationHeader) < 7 || !strings.EqualFold(authorizationHeader[:7], "bearer ") {
 				err := errors.New("invalid authorization header format")
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
 			}
 
-			authorizationType := strings.ToLower(fields[0])
-			if authorizationType != authorizationTypeBearer {
-				err := fmt.Errorf("unsupported authorization type %s", authorizationType)
-				http.Error(w, err.Error(), http.StatusUnauthorized)
-				return
-			}
-
-			accessToken := fields[1]
-			payload, err := tokenMaker.VerifyToken(accessToken)
+			accessToken := strings.TrimSpace(authorizationHeader[7:])
+			payload, err := verifyWithCache(tokenMaker, accessToken)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
