@@ -1,7 +1,5 @@
 package ads
 
-import ()
-
 import (
 	"hash/crc32"
 
@@ -23,12 +21,24 @@ func NewJumpHashSharder(numBuckets int) *JumpHashSharder {
 	return &JumpHashSharder{numBuckets: numBuckets}
 }
 
+var crc32Table = crc32.IEEETable
+
+// crc32IEEE computes the IEEE CRC32 checksum for a 16-byte UUID array
+// with zero allocations and no heap escapes.
+func crc32IEEE(data uuid.UUID) uint32 {
+	var crc uint32 = 0xffffffff
+	for i := 0; i < 16; i++ {
+		crc = crc32Table[byte(crc)^data[i]] ^ (crc >> 8)
+	}
+	return ^crc
+}
+
 func (s *JumpHashSharder) GetShard(id uuid.UUID) int {
 	if s.numBuckets <= 1 {
 		return 0
 	}
 
-	key := uint64(crc32.ChecksumIEEE(id[:]))
+	key := uint64(crc32IEEE(id))
 
 	return int(jumpHash(key, int32(s.numBuckets)))
 }

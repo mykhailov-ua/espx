@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 	"unsafe"
@@ -78,6 +79,21 @@ func unsafeString(b []byte) string {
 	return unsafe.String(&b[0], len(b))
 }
 
+type TimestampVal struct {
+	val int64
+	buf [32]byte
+}
+
+func (t *TimestampVal) MarshalBinary() ([]byte, error) {
+	return strconv.AppendInt(t.buf[:0], t.val, 10), nil
+}
+
+var timestampPool = sync.Pool{
+	New: func() any {
+		return &TimestampVal{}
+	},
+}
+
 type FraudFilter struct {
 	geo    GeoProvider
 	rdb    redis.UniversalClient
@@ -108,7 +124,10 @@ func (f *FraudFilter) Check(ctx context.Context, evt *domain.Event) error {
 		w.buf = appendUUID(w.buf, evt.CampaignID)
 		key := unsafeString(w.buf)
 
-		err := f.rdb.Set(ctx, key, time.Now().UnixMilli(), 10*time.Minute).Err()
+		tVal := timestampPool.Get().(*TimestampVal)
+		tVal.val = time.Now().UnixMilli()
+		err := f.rdb.Set(ctx, key, tVal, 10*time.Minute).Err()
+		timestampPool.Put(tVal)
 		bufPool.Put(w)
 
 		if err != nil {
@@ -168,10 +187,8 @@ func (f *GeoFilter) Check(ctx context.Context, evt *domain.Event) error {
 		return nil
 	}
 
-	for _, allowed := range camp.TargetCountries {
-		if allowed == country {
-			return nil
-		}
+	if _, allowed := camp.TargetCountries[country]; allowed {
+		return nil
 	}
 
 	return ErrGeoBlocked
@@ -236,16 +253,34 @@ func (e *FilterEngine) Check(ctx context.Context, evt *domain.Event) error {
 }
 
 type IPRateLimiter struct {
-	rdb    redis.Cmdable
-	limit  int
-	window time.Duration
+	rdb       redis.Cmdable
+	limit     int
+	window    time.Duration
+	limitAny  any
+	windowAny any
+	keysPool  sync.Pool
+	argsPool  sync.Pool
 }
 
 func NewIPRateLimiter(rdb redis.Cmdable, limit int, window time.Duration) *IPRateLimiter {
 	return &IPRateLimiter{
-		rdb:    rdb,
-		limit:  limit,
-		window: window,
+		rdb:       rdb,
+		limit:     limit,
+		window:    window,
+		limitAny:  limit,
+		windowAny: int64(window.Milliseconds()),
+		keysPool: sync.Pool{
+			New: func() any {
+				s := make([]string, 1)
+				return &s
+			},
+		},
+		argsPool: sync.Pool{
+			New: func() any {
+				s := make([]any, 2)
+				return &s
+			},
+		},
 	}
 }
 
@@ -271,10 +306,19 @@ func (l *IPRateLimiter) Check(ctx context.Context, evt *domain.Event) error {
 	w.buf = append(w.buf, evt.IP...)
 	key := unsafeString(w.buf)
 
-	windowMs := int64(l.window.Milliseconds())
+	keysPtr := l.keysPool.Get().(*[]string)
+	keys := *keysPtr
+	keys[0] = key
 
-	res, err := l.rdb.Eval(ctx, rateLimitScript, []string{key}, windowMs, l.limit).Result()
+	argsPtr := l.argsPool.Get().(*[]any)
+	args := *argsPtr
+	args[0] = l.windowAny
+	args[1] = l.limitAny
+
+	res, err := l.rdb.Eval(ctx, rateLimitScript, keys, args...).Result()
 	bufPool.Put(w)
+	l.keysPool.Put(keysPtr)
+	l.argsPool.Put(argsPtr)
 
 	if err != nil {
 		return err

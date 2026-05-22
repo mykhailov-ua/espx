@@ -70,11 +70,16 @@ func BenchmarkStreamWriteProto(b *testing.B) {
 		pbEvt.Ua = evt.UA
 		pbEvt.CreatedAtUnix = evt.CreatedAt.Unix()
 
-		data, err := proto.Marshal(pbEvt)
+		bufPtr := byteBufPool.Get().(*[]byte)
+		buf := (*bufPtr)[:0]
+
+		data, err := proto.MarshalOptions{}.MarshalAppend(buf, pbEvt)
 		if err != nil {
 			b.Fatalf("failed to marshal: %v", err)
 		}
 		streamEventPool.Put(pbEvt)
+		*bufPtr = data
+		byteBufPool.Put(bufPtr)
 		_ = data
 	}
 }
@@ -310,11 +315,16 @@ func BenchmarkDLQWriteProto(b *testing.B) {
 		pbDLQ.OriginalEvent.Ua = evt.UA
 		pbDLQ.OriginalEvent.CreatedAtUnix = evt.CreatedAt.Unix()
 
-		data, err := proto.Marshal(pbDLQ)
+		bufPtr := byteBufPool.Get().(*[]byte)
+		buf := (*bufPtr)[:0]
+
+		data, err := proto.MarshalOptions{}.MarshalAppend(buf, pbDLQ)
 		if err != nil {
 			b.Fatalf("failed to marshal: %v", err)
 		}
 		dlqEventPool.Put(pbDLQ)
+		*bufPtr = data
+		byteBufPool.Put(bufPtr)
 		_ = data
 	}
 }

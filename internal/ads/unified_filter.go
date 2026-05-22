@@ -3,9 +3,11 @@ package ads
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/google/uuid"
 
@@ -27,6 +29,40 @@ var keysPool = sync.Pool{
 	},
 }
 
+// argsPool recycles any slices to avoid variadic parameter heap allocation.
+var argsPool = sync.Pool{
+	New: func() any {
+		s := make([]any, 19)
+		return &s
+	},
+}
+
+type StringVal struct {
+	s string
+}
+
+func (sv *StringVal) MarshalBinary() ([]byte, error) {
+	if len(sv.s) == 0 {
+		return nil, nil
+	}
+	return unsafe.Slice(unsafe.StringData(sv.s), len(sv.s)), nil
+}
+
+type UnifiedStringWrappers struct {
+	clickID StringVal
+	evtType StringVal
+	payload StringVal
+	ip      StringVal
+	ua      StringVal
+	userID  StringVal
+}
+
+var unifiedWrappersPool = sync.Pool{
+	New: func() any {
+		return &UnifiedStringWrappers{}
+	},
+}
+
 // appendDate formats a time.Time struct into a YYYYMMDD byte layout without allocating memory.
 // It uses integer math to avoid formatting overhead from time.Format or fmt.Sprintf.
 func appendDate(dst []byte, t time.Time) []byte {
@@ -45,25 +81,40 @@ func appendDate(dst []byte, t time.Time) []byte {
 
 
 
+var (
+	zeroAny any = 0
+	oneAny  any = 1
+)
+
+var hourAnyCache [25]any
+
+func init() {
+	for i := 0; i <= 24; i++ {
+		hourAnyCache[i] = i
+	}
+}
+
 type UnifiedFilter struct {
-	rdbs                  []redis.UniversalClient
-	sharder               Sharder
-	script                *redis.Script
-	registry              domain.CampaignRegistry
-	repo                  domain.CampaignRepository
-	rateLimit             int
-	rateLimitWindow       time.Duration
-	dupTTL                time.Duration
-	idempotencyTTL        time.Duration
-	clickAmountMicro      int64
-	impressionAmountMicro int64
-	streamName            string
-	maxStreamLen          int
-	rateLimitWindowAny    any
-	rateLimitAny          any
-	dupTTLAny             any
-	idempotencyTTLAny     any
-	maxStreamLenAny       any
+	rdbs                     []redis.UniversalClient
+	sharder                  Sharder
+	script                   *redis.Script
+	registry                 domain.CampaignRegistry
+	repo                     domain.CampaignRepository
+	rateLimit                int
+	rateLimitWindow          time.Duration
+	dupTTL                   time.Duration
+	idempotencyTTL           time.Duration
+	clickAmountMicro         int64
+	impressionAmountMicro    int64
+	streamName               string
+	maxStreamLen             int
+	rateLimitWindowAny       any
+	rateLimitAny             any
+	dupTTLAny                any
+	idempotencyTTLAny        any
+	maxStreamLenAny          any
+	clickAmountMicroAny      any
+	impressionAmountMicroAny any
 }
 
 func NewUnifiedFilter(
@@ -80,25 +131,29 @@ func NewUnifiedFilter(
 	streamName string,
 	maxStreamLen int,
 ) *UnifiedFilter {
+	clickMicro := DecimalToMicro(clickAmount)
+	impMicro := DecimalToMicro(impressionAmount)
 	return &UnifiedFilter{
-		rdbs:                  rdbs,
-		sharder:               sharder,
-		script:                redis.NewScript(unifiedFilterLua),
-		registry:              registry,
-		repo:                  repo,
-		rateLimit:             rateLimit,
-		rateLimitWindow:       rateLimitWindow,
-		dupTTL:                dupTTL,
-		idempotencyTTL:        idempotencyTTL,
-		clickAmountMicro:      DecimalToMicro(clickAmount),
-		impressionAmountMicro: DecimalToMicro(impressionAmount),
-		streamName:            streamName,
-		maxStreamLen:          maxStreamLen,
-		rateLimitWindowAny:    int(rateLimitWindow.Seconds()),
-		rateLimitAny:          rateLimit,
-		dupTTLAny:             int(dupTTL.Seconds()),
-		idempotencyTTLAny:     int(idempotencyTTL.Seconds()),
-		maxStreamLenAny:       maxStreamLen,
+		rdbs:                     rdbs,
+		sharder:                  sharder,
+		script:                   redis.NewScript(unifiedFilterLua),
+		registry:                 registry,
+		repo:                     repo,
+		rateLimit:                rateLimit,
+		rateLimitWindow:          rateLimitWindow,
+		dupTTL:                   dupTTL,
+		idempotencyTTL:           idempotencyTTL,
+		clickAmountMicro:         clickMicro,
+		impressionAmountMicro:    impMicro,
+		streamName:               streamName,
+		maxStreamLen:             maxStreamLen,
+		rateLimitWindowAny:       int(rateLimitWindow.Seconds()),
+		rateLimitAny:             rateLimit,
+		dupTTLAny:                int(dupTTL.Seconds()),
+		idempotencyTTLAny:        int(idempotencyTTL.Seconds()),
+		maxStreamLenAny:          maxStreamLen,
+		clickAmountMicroAny:      clickMicro,
+		impressionAmountMicroAny: impMicro,
 	}
 }
 
@@ -124,9 +179,9 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	campaignIDStr := campInfo.IDStr
 	customerIDStr := campInfo.CustomerIDStr
 
-	amount := f.clickAmountMicro
+	amount := f.clickAmountMicroAny
 	if evt.Type == "impression" {
-		amount = f.impressionAmountMicro
+		amount = f.impressionAmountMicroAny
 	}
 
 	rdb := f.getRDB(evt.CampaignID)
@@ -141,6 +196,8 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	wDS := bufPool.Get().(*bufWrapper)
 	wFcap := bufPool.Get().(*bufWrapper)
 	keysPtr := keysPool.Get().(*[]string)
+	argsPtr := argsPool.Get().(*[]any)
+	wrappers := unifiedWrappersPool.Get().(*UnifiedStringWrappers)
 
 	defer func() {
 		bufPool.Put(wRL)
@@ -153,6 +210,8 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 		bufPool.Put(wDS)
 		bufPool.Put(wFcap)
 		keysPool.Put(keysPtr)
+		argsPool.Put(argsPtr)
+		unifiedWrappersPool.Put(wrappers)
 	}()
 
 	wRL.buf = wRL.buf[:0]
@@ -191,13 +250,16 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	dirtyCustomersKey := "budget:dirty_customers"
 	streamKey := f.streamName
 
-	now := time.Now().In(campInfo.Location)
+	var now time.Time
+	if campInfo.Location == time.UTC {
+		now = time.Now().UTC()
+	} else {
+		now = time.Now().In(campInfo.Location)
+	}
 
 	wDate.buf = wDate.buf[:0]
 	wDate.buf = appendDate(wDate.buf, now)
 	currentDate := unsafeString(wDate.buf)
-
-	currentHour := now.Hour() + 1 // 1-24
 
 	wDS.buf = wDS.buf[:0]
 	wDS.buf = append(wDS.buf, "budget:daily_spent:campaign:"...)
@@ -238,36 +300,56 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	keys[9] = dailySpendKey
 	keys[10] = fcapKey
 
-	isEven := 0
+	isEven := zeroAny
 	if campInfo.PacingMode == domain.PacingModeEven {
-		isEven = 1
+		isEven = oneAny
 	}
+
+	hr := now.Hour() + 1
+	if hr < 1 {
+		hr = 1
+	} else if hr > 24 {
+		hr = 24
+	}
+	currentHour := hourAnyCache[hr]
+
+	wrappers.clickID.s = evt.ClickID
+	wrappers.evtType.s = evt.Type
+	wrappers.payload.s = unsafeString(evt.Payload)
+	wrappers.ip.s = evt.IP
+	wrappers.ua.s = evt.UA
+	wrappers.userID.s = evt.UserID
+
+	args := *argsPtr
+	args[0] = f.rateLimitWindowAny
+	args[1] = f.rateLimitAny
+	args[2] = f.dupTTLAny
+	args[3] = amount
+	args[4] = f.idempotencyTTLAny
+	args[5] = campInfo.IDStrAny
+	args[6] = campInfo.CustomerIDStrAny
+	args[7] = f.maxStreamLenAny
+	args[8] = &wrappers.clickID
+	args[9] = &wrappers.evtType
+	args[10] = &wrappers.payload
+	args[11] = &wrappers.ip
+	args[12] = &wrappers.ua
+	args[13] = isEven
+	args[14] = campInfo.DailyBudgetMicroAny
+	args[15] = currentHour
+	args[16] = &wrappers.userID
+	args[17] = campInfo.FreqLimitAny
+	args[18] = campInfo.FreqWindowAny
 
 	// Loop executes up to 2 times to handle potential Redis budget cache misses.
 	// If the unified Lua script returns -1, the budget key is loaded from the primary PostgreSQL
 	// database and seeded into Redis, after which the script is re-run.
 	for i := 0; i < 2; i++ {
-		res, err := f.script.Run(ctx, rdb, keys,
-			f.rateLimitWindowAny,
-			f.rateLimitAny,
-			f.dupTTLAny,
-			amount,
-			f.idempotencyTTLAny,
-			campaignIDStr,
-			customerIDStr,
-			f.maxStreamLenAny,
-			evt.ClickID,
-			evt.Type,
-			evt.Payload,
-			evt.IP,
-			evt.UA,
-			isEven,
-			campInfo.DailyBudgetMicro,
-			currentHour,
-			evt.UserID,
-			campInfo.FreqLimit,
-			campInfo.FreqWindow,
-		).Int64()
+		cmd := f.script.EvalSha(ctx, rdb, keys, args...)
+		if err := cmd.Err(); err != nil && (errors.Is(err, redis.ErrNoScript) || err.Error() == "NOSCRIPT No matching script. Please use EVAL.") {
+			cmd = f.script.Eval(ctx, rdb, keys, args...)
+		}
+		res, err := cmd.Int64()
 
 		if err != nil {
 			return err
