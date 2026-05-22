@@ -171,3 +171,58 @@ func TestCircuitBreaker_ConcurrentMixedOps(t *testing.T) {
 	state := cb.State()
 	assert.Contains(t, []CircuitState{CircuitClosed, CircuitOpen, CircuitHalfOpen}, state)
 }
+
+func TestCircuitBreaker_CancellationResetsHalfOpen(t *testing.T) {
+	cb := NewCircuitBreaker(1, 50*time.Millisecond)
+
+	cb.RecordFailure("test")
+	assert.Equal(t, CircuitOpen, cb.State())
+
+	time.Sleep(60 * time.Millisecond)
+
+	// Transition to HalfOpen by allowing a probe
+	require.True(t, cb.Allow())
+	assert.Equal(t, CircuitHalfOpen, cb.State())
+
+	// Call RecordCancellation to transition back to CircuitOpen
+	cb.RecordCancellation("test")
+	assert.Equal(t, CircuitOpen, cb.State())
+
+	// Since state is CircuitOpen, cb.Allow() must return false immediately because cb.openTimeout is reset
+	assert.False(t, cb.Allow())
+}
+
+func TestCircuitBreaker_HalfOpenSingleFailureReopensEvenBelowThreshold(t *testing.T) {
+	cb := NewCircuitBreaker(5, 50*time.Millisecond)
+
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
+	cb.RecordFailure("test")
+	assert.Equal(t, CircuitOpen, cb.State())
+
+	time.Sleep(60 * time.Millisecond)
+
+	require.True(t, cb.Allow())
+	assert.Equal(t, CircuitHalfOpen, cb.State())
+
+	cb.RecordFailure("other-worker")
+	assert.Equal(t, CircuitOpen, cb.State())
+	assert.False(t, cb.Allow())
+}
+
+func TestCircuitBreaker_SuccessDoesNotMaskConcurrentWorkerFailures(t *testing.T) {
+	cb := NewCircuitBreaker(3, 1*time.Second)
+
+	cb.RecordFailure("worker-A")
+	cb.RecordFailure("worker-A")
+	assert.Equal(t, 2, cb.Failures("worker-A"))
+
+	cb.RecordSuccess("worker-B")
+
+	assert.Equal(t, 2, cb.Failures("worker-A"))
+
+	cb.RecordFailure("worker-A")
+	assert.Equal(t, CircuitOpen, cb.State())
+}

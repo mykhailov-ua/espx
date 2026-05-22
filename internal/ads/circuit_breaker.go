@@ -2,7 +2,6 @@ package ads
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -27,34 +26,42 @@ func (s CircuitState) String() string {
 	}
 }
 
+// CircuitBreaker implements thread-safe status transitions and worker-granular failure isolation.
+// It tracks worker/shard health independently in an in-memory map to allow faulty worker routes
+// (e.g. failing clickhouse/postgres connections on specific hosts) to open the breaker without
+// starving healthy ingestion paths. Lock contention is bounded by local worker-granular scopes.
 type CircuitBreaker struct {
-	state         atomic.Int32
-	failures      sync.Map // string -> *atomic.Int32
-	lastOpenedAt  atomic.Int64
+	mu            sync.Mutex
+	state         CircuitState
+	failures      map[string]int32
+	lastOpenedAt  time.Time
 	failThreshold int32
 	openTimeout   time.Duration
 }
 
+// NewCircuitBreaker initializes a circuit breaker instance. The threshold is tracked per-worker
+// to ensure granular worker faults trigger the breaker rather than global system noise.
 func NewCircuitBreaker(failThreshold int, openTimeout time.Duration) *CircuitBreaker {
 	return &CircuitBreaker{
+		state:         CircuitClosed,
+		failures:      make(map[string]int32),
 		failThreshold: int32(failThreshold),
 		openTimeout:   openTimeout,
 	}
 }
 
 func (cb *CircuitBreaker) Allow() bool {
-	state := CircuitState(cb.state.Load())
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 
-	switch state {
+	switch cb.state {
 	case CircuitClosed:
 		return true
 
 	case CircuitOpen:
-		openedAt := cb.lastOpenedAt.Load()
-		if time.Since(time.Unix(0, openedAt)) >= cb.openTimeout {
-			if cb.state.CompareAndSwap(int32(CircuitOpen), int32(CircuitHalfOpen)) {
-				return true
-			}
+		if time.Since(cb.lastOpenedAt) >= cb.openTimeout {
+			cb.state = CircuitHalfOpen
+			return true
 		}
 		return false
 
@@ -67,42 +74,65 @@ func (cb *CircuitBreaker) Allow() bool {
 }
 
 func (cb *CircuitBreaker) RecordSuccess(workerID string) {
-	cb.failures.Range(func(key, value interface{}) bool {
-		value.(*atomic.Int32).Store(0)
-		return true
-	})
-	cb.state.Store(int32(CircuitClosed))
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == CircuitHalfOpen {
+		cb.failures = make(map[string]int32)
+		cb.state = CircuitClosed
+	} else {
+		delete(cb.failures, workerID)
+	}
 }
 
 func (cb *CircuitBreaker) RecordFailure(workerID string) {
-	val, _ := cb.failures.LoadOrStore(workerID, &atomic.Int32{})
-	counter := val.(*atomic.Int32)
-	newCount := counter.Add(1)
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
 
-	if newCount >= cb.failThreshold {
-		if oldState := CircuitState(cb.state.Swap(int32(CircuitOpen))); oldState != CircuitOpen {
-			cb.lastOpenedAt.Store(time.Now().UnixNano())
+	cb.failures[workerID]++
+	if cb.state == CircuitHalfOpen {
+		cb.state = CircuitOpen
+		cb.lastOpenedAt = time.Now()
+		return
+	}
+	if cb.failures[workerID] >= cb.failThreshold {
+		if cb.state != CircuitOpen {
+			cb.state = CircuitOpen
+			cb.lastOpenedAt = time.Now()
 		}
 	}
 }
 
+func (cb *CircuitBreaker) RecordCancellation(workerID string) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == CircuitHalfOpen {
+		cb.state = CircuitOpen
+		cb.lastOpenedAt = time.Now()
+	}
+}
+
 func (cb *CircuitBreaker) State() CircuitState {
-	return CircuitState(cb.state.Load())
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return cb.state
 }
 
 func (cb *CircuitBreaker) Failures(workerID string) int {
-	if val, ok := cb.failures.Load(workerID); ok {
-		return int(val.(*atomic.Int32).Load())
-	}
-	return 0
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	return int(cb.failures[workerID])
 }
 
 func (cb *CircuitBreaker) WaitDuration() time.Duration {
-	if CircuitState(cb.state.Load()) != CircuitOpen {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state != CircuitOpen {
 		return 0
 	}
-	openedAt := time.Unix(0, cb.lastOpenedAt.Load())
-	remaining := cb.openTimeout - time.Since(openedAt)
+	remaining := cb.openTimeout - time.Since(cb.lastOpenedAt)
 	if remaining < 0 {
 		return 0
 	}
