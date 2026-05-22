@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
@@ -73,6 +74,17 @@ func FromNumeric(n pgtype.Numeric) decimal.Decimal {
 	return decimal.NewFromFloat(f.Float64)
 }
 
+func SliceToMap(slice []string) map[string]struct{} {
+	if slice == nil {
+		return nil
+	}
+	m := make(map[string]struct{}, len(slice))
+	for _, s := range slice {
+		m[s] = struct{}{}
+	}
+	return m
+}
+
 type CampaignRepo struct {
 	queries db.Querier
 }
@@ -104,7 +116,7 @@ func (r *CampaignRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Campa
 		Location:        loc,
 		FreqLimit:       row.FreqLimit.Int32,
 		FreqWindow:      row.FreqWindow.Int32,
-		TargetCountries: row.TargetCountries,
+		TargetCountries: SliceToMap(row.TargetCountries),
 	}, nil
 }
 
@@ -116,11 +128,62 @@ func (r *CampaignRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status do
 	return err
 }
 
-func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
-	return r.queries.UpdateCampaignSpend(ctx, db.UpdateCampaignSpendParams{
+func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txID string) error {
+	var dbtx db.DBTX
+	if getter, ok := r.queries.(interface{ DB() db.DBTX }); ok {
+		dbtx = getter.DB()
+	}
+
+	if dbtx == nil {
+		return r.queries.UpdateCampaignSpend(ctx, db.UpdateCampaignSpendParams{
+			ID:           pgtype.UUID{Bytes: id, Valid: true},
+			CurrentSpend: ToNumeric(amount),
+		})
+	}
+
+	var tx pgx.Tx
+	var err error
+	if beginner, ok := dbtx.(interface{ Begin(context.Context) (pgx.Tx, error) }); ok {
+		tx, err = beginner.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+	}
+
+	var exec db.DBTX = dbtx
+	if tx != nil {
+		exec = tx
+	}
+
+	tag, err := exec.Exec(ctx, "INSERT INTO sync_idempotency (id) VALUES ($1) ON CONFLICT DO NOTHING", txID)
+	if err != nil {
+		return err
+	}
+
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+
+	var q db.Querier = r.queries
+	if tx != nil {
+		if concreteQueries, ok := r.queries.(*db.Queries); ok {
+			q = concreteQueries.WithTx(tx)
+		}
+	}
+
+	err = q.UpdateCampaignSpend(ctx, db.UpdateCampaignSpendParams{
 		ID:           pgtype.UUID{Bytes: id, Valid: true},
 		CurrentSpend: ToNumeric(amount),
 	})
+	if err != nil {
+		return err
+	}
+
+	if tx != nil {
+		return tx.Commit(ctx)
+	}
+	return nil
 }
 
 func (r *CampaignRepo) ListActive(ctx context.Context) ([]*domain.Campaign, error) {
@@ -149,7 +212,7 @@ func (r *CampaignRepo) ListActive(ctx context.Context) ([]*domain.Campaign, erro
 			Location:        loc,
 			FreqLimit:       row.FreqLimit.Int32,
 			FreqWindow:      row.FreqWindow.Int32,
-			TargetCountries: row.TargetCountries,
+			TargetCountries: SliceToMap(row.TargetCountries),
 		}
 	}
 	return campaigns, nil
@@ -177,9 +240,60 @@ func (r *CustomerRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Custo
 	}, nil
 }
 
-func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal) error {
-	return r.queries.UpdateCustomerBalance(ctx, db.UpdateCustomerBalanceParams{
+func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txID string) error {
+	var dbtx db.DBTX
+	if getter, ok := r.queries.(interface{ DB() db.DBTX }); ok {
+		dbtx = getter.DB()
+	}
+
+	if dbtx == nil {
+		return r.queries.UpdateCustomerBalance(ctx, db.UpdateCustomerBalanceParams{
+			ID:      pgtype.UUID{Bytes: id, Valid: true},
+			Balance: ToNumeric(amount),
+		})
+	}
+
+	var tx pgx.Tx
+	var err error
+	if beginner, ok := dbtx.(interface{ Begin(context.Context) (pgx.Tx, error) }); ok {
+		tx, err = beginner.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+	}
+
+	var exec db.DBTX = dbtx
+	if tx != nil {
+		exec = tx
+	}
+
+	tag, err := exec.Exec(ctx, "INSERT INTO sync_idempotency (id) VALUES ($1) ON CONFLICT DO NOTHING", txID)
+	if err != nil {
+		return err
+	}
+
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+
+	var q db.Querier = r.queries
+	if tx != nil {
+		if concreteQueries, ok := r.queries.(*db.Queries); ok {
+			q = concreteQueries.WithTx(tx)
+		}
+	}
+
+	err = q.UpdateCustomerBalance(ctx, db.UpdateCustomerBalanceParams{
 		ID:      pgtype.UUID{Bytes: id, Valid: true},
 		Balance: ToNumeric(amount),
 	})
+	if err != nil {
+		return err
+	}
+
+	if tx != nil {
+		return tx.Commit(ctx)
+	}
+	return nil
 }
