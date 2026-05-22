@@ -66,6 +66,10 @@ func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []*domain.Event
 	return err
 }
 
+// insertToClickHouse classifies and persists events to corresponding ClickHouse tables.
+// Recycled event slices are fetched from a sync.Pool to eliminate high-volume heap allocations.
+// Granular tracking via the InsertedToCH flag avoids double-inserting elements during retry loops
+// if a partial batch insertion failure occurs across different tables.
 func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*domain.Event) error {
 	start := time.Now()
 
@@ -75,10 +79,26 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 	pFraud := slicePool.Get().(*[]*domain.Event)
 
 	defer func() {
+		for i := range *pImps {
+			(*pImps)[i] = nil
+		}
 		*pImps = (*pImps)[:0]
+
+		for i := range *pClicks {
+			(*pClicks)[i] = nil
+		}
 		*pClicks = (*pClicks)[:0]
+
+		for i := range *pConvs {
+			(*pConvs)[i] = nil
+		}
 		*pConvs = (*pConvs)[:0]
+
+		for i := range *pFraud {
+			(*pFraud)[i] = nil
+		}
 		*pFraud = (*pFraud)[:0]
+
 		if cap(*pImps) <= 5000 {
 			slicePool.Put(pImps)
 		}
@@ -100,6 +120,9 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 
 	for i := range events {
 		e := events[i]
+		if e.InsertedToCH {
+			continue
+		}
 		if e.FraudReason != "" {
 			fraud = append(fraud, e)
 			continue
@@ -157,6 +180,9 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 
 		if err := batch.Send(); err != nil {
 			return fmt.Errorf("send %s: %w", table, err)
+		}
+		for _, e := range evts {
+			e.InsertedToCH = true
 		}
 		return nil
 	}
