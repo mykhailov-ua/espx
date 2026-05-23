@@ -100,6 +100,8 @@ type UnifiedFilter struct {
 	script                   *redis.Script
 	registry                 domain.CampaignRegistry
 	repo                     domain.CampaignRepository
+	geo                      GeoProvider
+	geoFloors                sync.Map
 	rateLimit                int
 	rateLimitWindow          time.Duration
 	dupTTL                   time.Duration
@@ -115,6 +117,63 @@ type UnifiedFilter struct {
 	maxStreamLenAny          any
 	clickAmountMicroAny      any
 	impressionAmountMicroAny any
+}
+
+// SetGeoProvider configures the GeoIP resolution service.
+func (f *UnifiedFilter) SetGeoProvider(geo GeoProvider) {
+	// A setter maintains compatibility with existing constructors.
+	f.geo = geo
+}
+
+// SetGeoBidFloor registers or updates a publisher floor limit for a specific geo.
+func (f *UnifiedFilter) SetGeoBidFloor(country string, floor int64) {
+	// Use sync.Map to guarantee thread-safe read-heavy configuration updates.
+	f.geoFloors.Store(country, floor)
+}
+
+// parseBidMicro extracts the bid_micro value from a JSON byte slice without heap allocation.
+// This is a highly optimized scanner that avoids reflection and unmarshaling overhead on the hot path.
+func parseBidMicro(payload []byte) int64 {
+	const key = `"bid_micro"`
+	n := len(payload)
+	kLen := len(key)
+	if n < kLen {
+		return 0
+	}
+	
+	// Scan the payload for the raw key occurrence
+	for i := 0; i <= n-kLen; i++ {
+		if payload[i] == '"' && string(payload[i:i+kLen]) == key {
+			// Find the colon separating the key and value
+			idx := i + kLen
+			for idx < n && (payload[idx] == ' ' || payload[idx] == '\t' || payload[idx] == ':') {
+				if payload[idx] == ':' {
+					idx++
+					break
+				}
+				idx++
+			}
+			
+			// Skip any whitespace before the number
+			for idx < n && (payload[idx] == ' ' || payload[idx] == '\t') {
+				idx++
+			}
+			
+			// Parse the raw integer value directly
+			var val int64
+			hasDigit := false
+			for idx < n && payload[idx] >= '0' && payload[idx] <= '9' {
+				val = val*10 + int64(payload[idx]-'0')
+				idx++
+				hasDigit = true
+			}
+			if hasDigit {
+				return val
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 func NewUnifiedFilter(
@@ -172,8 +231,28 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	}
 
 	if evt.ClickID == "" {
-		id, _ := uuid.NewV7()
+		id, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("failed to generate click id: %w", err)
+		}
 		evt.ClickID = id.String()
+	}
+
+	// Verify dynamic geo bid floor if a geo provider and target floor are configured.
+	// This filters out events that do not meet the minimum bid requirement for their resolved country code.
+	if f.geo != nil {
+		country, err := f.geo.GetCountry(evt.IP)
+		if err == nil && country != "" {
+			if floorVal, found := f.geoFloors.Load(country); found {
+				floor := floorVal.(int64)
+				if floor > 0 {
+					bid := parseBidMicro(evt.Payload)
+					if bid < floor {
+						return ErrBidFloorNotMet
+					}
+				}
+			}
+		}
 	}
 
 	campaignIDStr := campInfo.IDStr

@@ -25,6 +25,7 @@ var (
 	ErrGeoBlocked            = errors.New("geo-targeting blocked")
 	ErrFraudDetected         = errors.New("fraud detected")
 	ErrEmergencyBreakerActive = errors.New("service temporarily unavailable (emergency breaker active)")
+	ErrBidFloorNotMet         = errors.New("bid floor not met")
 )
 
 

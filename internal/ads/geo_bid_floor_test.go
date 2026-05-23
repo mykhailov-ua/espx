@@ -1,0 +1,139 @@
+package ads
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	redis "github.com/redis/go-redis/v9"
+	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestParseBidMicro(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  string
+		expected int64
+	}{
+		{"Valid bid_micro", `{"bid_micro": 1500000, "pub_id": "1"}`, 1500000},
+		{"Spaces and tabs", `{"bid_micro" 	: 	2500000}`, 2500000},
+		{"Missing key", `{"pub_id": "1"}`, 0},
+		{"Zero bid_micro", `{"bid_micro": 0}`, 0},
+		{"Negative value", `{"bid_micro": -100}`, 0},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseBidMicro([]byte(tc.payload))
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+func BenchmarkParseBidMicro(b *testing.B) {
+	payload := []byte(`{"bid_micro": 1500000, "pub_id": "pub-12345"}`)
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		_ = parseBidMicro(payload)
+	}
+}
+
+func TestUnifiedFilter_GeoBidFloor(t *testing.T) {
+	campID := uuid.New()
+	reg := &mockRegistry{} // Reuses the mockRegistry from handler_test.go
+
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	f := NewUnifiedFilter(
+		[]redis.UniversalClient{rdb},
+		NewJumpHashSharder(1),
+		reg,
+		nil,
+		100,
+		time.Minute,
+		time.Hour,
+		time.Hour,
+		decimal.NewFromFloat(0.10),
+		decimal.NewFromFloat(0.01),
+		"events-stream",
+		10000,
+	)
+
+	geo := &MockGeoProvider{
+		Countries: map[string]string{
+			"2.2.2.2": "UA",
+			"3.3.3.3": "US",
+			"":        "",
+		},
+	}
+	f.SetGeoProvider(geo)
+	f.SetGeoBidFloor("UA", 1500000)
+	f.SetGeoBidFloor("US", 3000000)
+
+	ctx := context.Background()
+
+	// Case 1: UA Event, Bid 1.00 USD -> Must fail
+	evt1 := &domain.Event{
+		CampaignID: campID,
+		IP:         "2.2.2.2",
+		Payload:    []byte(`{"bid_micro": 1000000}`),
+		UserID:     "user1",
+	}
+	err := f.Check(ctx, evt1)
+	assert.ErrorIs(t, err, ErrBidFloorNotMet)
+
+	// Case 2: UA Event, Bid 2.00 USD -> Must pass floor check
+	evt2 := &domain.Event{
+		CampaignID: campID,
+		IP:         "2.2.2.2",
+		Payload:    []byte(`{"bid_micro": 2000000}`),
+		UserID:     "user1",
+	}
+	err = f.Check(ctx, evt2)
+	assert.NotErrorIs(t, err, ErrBidFloorNotMet)
+
+	// Case 3: DE Event (no floor configured) -> Must pass floor check
+	evt3 := &domain.Event{
+		CampaignID: campID,
+		IP:         "4.4.4.4",
+		Payload:    []byte(`{"bid_micro": 100000}`),
+		UserID:     "user1",
+	}
+	geo.Countries["4.4.4.4"] = "DE"
+	err = f.Check(ctx, evt3)
+	assert.NotErrorIs(t, err, ErrBidFloorNotMet)
+
+	// Case 4: Empty IP -> Should skip geo check and pass
+	evtEmptyIP := &domain.Event{
+		CampaignID: campID,
+		IP:         "",
+		Payload:    []byte(`{"bid_micro": 100000}`),
+		UserID:     "user1",
+	}
+	err = f.Check(ctx, evtEmptyIP)
+	assert.NotErrorIs(t, err, ErrBidFloorNotMet)
+
+	// Case 5: Empty/Nil Payload -> Treat as bid = 0 and reject if floor exists
+	evtEmptyPayload := &domain.Event{
+		CampaignID: campID,
+		IP:         "2.2.2.2",
+		Payload:    nil,
+		UserID:     "user1",
+	}
+	err = f.Check(ctx, evtEmptyPayload)
+	assert.ErrorIs(t, err, ErrBidFloorNotMet)
+
+	// Case 6: Malformed JSON -> Treat as bid = 0 and reject if floor exists
+	evtMalformed := &domain.Event{
+		CampaignID: campID,
+		IP:         "2.2.2.2",
+		Payload:    []byte(`{bid_micro: 1500000`),
+		UserID:     "user1",
+	}
+	err = f.Check(ctx, evtMalformed)
+	assert.ErrorIs(t, err, ErrBidFloorNotMet)
+}
