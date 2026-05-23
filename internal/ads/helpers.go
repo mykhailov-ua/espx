@@ -67,11 +67,54 @@ func ToNumeric(d decimal.Decimal) pgtype.Numeric {
 }
 
 func FromNumeric(n pgtype.Numeric) decimal.Decimal {
-	f, _ := n.Float64Value()
-	if !f.Valid {
+	f, err := n.Float64Value()
+	if err != nil || !f.Valid {
 		return decimal.Zero
 	}
 	return decimal.NewFromFloat(f.Float64)
+}
+
+func NumericToMicro(n pgtype.Numeric) int64 {
+	if !n.Valid || n.Int == nil {
+		return 0
+	}
+	targetExp := n.Exp + 6
+	if targetExp >= 0 {
+		if n.Int.IsInt64() {
+			val := n.Int.Int64()
+			multiplier := int64(1)
+			for i := int32(0); i < targetExp; i++ {
+				if multiplier > 922337203685477580 {
+					return 0
+				}
+				multiplier *= 10
+			}
+			if val > 0 && val > 9223372036854775807/multiplier {
+				return 0
+			}
+			if val < 0 && val < (-9223372036854775807-1)/multiplier {
+				return 0
+			}
+			return val * multiplier
+		}
+	} else {
+		if n.Int.IsInt64() {
+			val := n.Int.Int64()
+			divisor := int64(1)
+			for i := int32(0); i < -targetExp; i++ {
+				if divisor > 922337203685477580 {
+					return 0
+				}
+				divisor *= 10
+			}
+			return val / divisor
+		}
+	}
+	f, err := n.Float64Value()
+	if err != nil || !f.Valid {
+		return 0
+	}
+	return int64(f.Float64 * 1000000)
 }
 
 func SliceToMap(slice []string) map[string]struct{} {

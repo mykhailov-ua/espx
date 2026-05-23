@@ -22,13 +22,14 @@ import (
 )
 
 type Service struct {
-	pool    *pgxpool.Pool
-	rdbs    []redis.UniversalClient
-	sharder ads.Sharder
-	cfg     *config.Config
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	pool     *pgxpool.Pool
+	rdbs     []redis.UniversalClient
+	sharder  ads.Sharder
+	cfg      *config.Config
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	locCache sync.Map
 }
 
 func NewService(pool *pgxpool.Pool, rdbs []redis.UniversalClient, sharder ads.Sharder, cfg *config.Config) *Service {
@@ -65,6 +66,17 @@ func (s *Service) Close() {
 		s.cancel()
 	}
 	s.wg.Wait()
+}
+
+// StartPacingController spawns the closed-loop pacing feedback worker in a background goroutine.
+func (s *Service) StartPacingController(syncWorkers []*ads.SyncWorker, interval time.Duration) {
+	// Periodic pacing adjustment enables real-time rate regulation across active campaigns.
+	s.wg.Add(1)
+	w := NewPacingControllerWorker(s, syncWorkers)
+	go func() {
+		defer s.wg.Done()
+		w.Start(s.ctx, interval)
+	}()
 }
 
 func (s *Service) GetCampaign(ctx context.Context, id uuid.UUID) (db.Campaign, error) {

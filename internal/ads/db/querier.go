@@ -12,12 +12,12 @@ import (
 
 type Querier interface {
 	CleanupAuditLogs(ctx context.Context, createdAt pgtype.Timestamptz) error
+	ConfigureBrandFcap(ctx context.Context, arg ConfigureBrandFcapParams) error
 	CountBlacklist(ctx context.Context) (int64, error)
 	CountCampaigns(ctx context.Context, arg CountCampaignsParams) (int64, error)
 	CountCustomerLedger(ctx context.Context, customerID pgtype.UUID) (int64, error)
 	CountCustomers(ctx context.Context) (int64, error)
 	CountStatusHistory(ctx context.Context, campaignID pgtype.UUID) (int64, error)
-	ConfigureBrandFcap(ctx context.Context, arg ConfigureBrandFcapParams) error
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) (AdminAuditLog, error)
 	CreateBlacklistIP(ctx context.Context, arg CreateBlacklistIPParams) (IpBlacklist, error)
 	CreateBrand(ctx context.Context, arg CreateBrandParams) (AdvertiserBrand, error)
@@ -34,6 +34,7 @@ type Querier interface {
 	GetBrandForUpdate(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error)
 	GetCampaign(ctx context.Context, id pgtype.UUID) (Campaign, error)
 	GetCampaignBudget(ctx context.Context, id pgtype.UUID) (GetCampaignBudgetRow, error)
+	GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error)
 	GetCampaignFull(ctx context.Context, id pgtype.UUID) (Campaign, error)
 	GetCampaignStats(ctx context.Context, campaignID pgtype.UUID) ([]CampaignStat, error)
 	GetCampaignsWithStats(ctx context.Context, customerID pgtype.UUID) ([]GetCampaignsWithStatsRow, error)
@@ -67,6 +68,7 @@ type Querier interface {
 	SetSystemSetting(ctx context.Context, arg SetSystemSettingParams) error
 	SoftDeleteCampaign(ctx context.Context, id pgtype.UUID) error
 	UpdateCampaignBudget(ctx context.Context, arg UpdateCampaignBudgetParams) (Campaign, error)
+	UpdateCampaignPacing(ctx context.Context, arg UpdateCampaignPacingParams) (Campaign, error)
 	UpdateCampaignSpend(ctx context.Context, arg UpdateCampaignSpendParams) error
 	UpdateCampaignStats(ctx context.Context, arg UpdateCampaignStatsParams) error
 	UpdateCampaignStatsBatch(ctx context.Context, arg UpdateCampaignStatsBatchParams) error
@@ -74,8 +76,6 @@ type Querier interface {
 	UpdateCustomerBalance(ctx context.Context, arg UpdateCustomerBalanceParams) error
 	UpdateCustomerBalanceManagement(ctx context.Context, arg UpdateCustomerBalanceManagementParams) (Customer, error)
 	UpdateCustomerOverdraft(ctx context.Context, arg UpdateCustomerOverdraftParams) (Customer, error)
-	GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error)
-	UpdateCampaignPacing(ctx context.Context, arg UpdateCampaignPacingParams) (Campaign, error)
 }
 
 var _ Querier = (*Queries)(nil)

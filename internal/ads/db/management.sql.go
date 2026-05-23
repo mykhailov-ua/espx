@@ -21,6 +21,25 @@ func (q *Queries) CleanupAuditLogs(ctx context.Context, createdAt pgtype.Timesta
 	return err
 }
 
+const configureBrandFcap = `-- name: ConfigureBrandFcap :exec
+UPDATE advertiser_brands
+SET freq_limit = $2,
+    freq_window = $3,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+`
+
+type ConfigureBrandFcapParams struct {
+	ID         pgtype.UUID `json:"id"`
+	FreqLimit  int32       `json:"freq_limit"`
+	FreqWindow int32       `json:"freq_window"`
+}
+
+func (q *Queries) ConfigureBrandFcap(ctx context.Context, arg ConfigureBrandFcapParams) error {
+	_, err := q.db.Exec(ctx, configureBrandFcap, arg.ID, arg.FreqLimit, arg.FreqWindow)
+	return err
+}
+
 const countBlacklist = `-- name: CountBlacklist :one
 SELECT COUNT(*) FROM ip_blacklist
 `
@@ -466,6 +485,37 @@ func (q *Queries) GetBrandForUpdate(ctx context.Context, id pgtype.UUID) (Advert
 		&i.UpdatedAt,
 		&i.FreqLimit,
 		&i.FreqWindow,
+	)
+	return i, err
+}
+
+const getCampaignForUpdate = `-- name: GetCampaignForUpdate :one
+SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns
+WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error) {
+	row := q.db.QueryRow(ctx, getCampaignForUpdate, id)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.BudgetLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CustomerID,
+		&i.CurrentSpend,
+		&i.DeletedAt,
+		&i.PacingMode,
+		&i.DailyBudget,
+		&i.Timezone,
+		&i.FreqLimit,
+		&i.FreqWindow,
+		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
 	)
 	return i, err
 }
@@ -1159,6 +1209,44 @@ func (q *Queries) UpdateCampaignBudget(ctx context.Context, arg UpdateCampaignBu
 	return i, err
 }
 
+const updateCampaignPacing = `-- name: UpdateCampaignPacing :one
+UPDATE campaigns
+SET pacing_mode = $2,
+    updated_at = CURRENT_TIMESTAMP
+WHERE id = $1
+RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
+`
+
+type UpdateCampaignPacingParams struct {
+	ID         pgtype.UUID    `json:"id"`
+	PacingMode PacingModeType `json:"pacing_mode"`
+}
+
+func (q *Queries) UpdateCampaignPacing(ctx context.Context, arg UpdateCampaignPacingParams) (Campaign, error) {
+	row := q.db.QueryRow(ctx, updateCampaignPacing, arg.ID, arg.PacingMode)
+	var i Campaign
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Status,
+		&i.BudgetLimit,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CustomerID,
+		&i.CurrentSpend,
+		&i.DeletedAt,
+		&i.PacingMode,
+		&i.DailyBudget,
+		&i.Timezone,
+		&i.FreqLimit,
+		&i.FreqWindow,
+		&i.TargetCountries,
+		&i.BrandID,
+		&i.BrandFcapKey,
+	)
+	return i, err
+}
+
 const updateCampaignStatus = `-- name: UpdateCampaignStatus :one
 UPDATE campaigns
 SET status = $2,
@@ -1249,94 +1337,6 @@ func (q *Queries) UpdateCustomerOverdraft(ctx context.Context, arg UpdateCustome
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.AllowedOverdraft,
-	)
-	return i, err
-}
-
-const configureBrandFcap = `-- name: ConfigureBrandFcap :exec
-UPDATE advertiser_brands
-SET freq_limit = $2,
-    freq_window = $3,
-    updated_at = CURRENT_TIMESTAMP
-WHERE id = $1
-`
-
-type ConfigureBrandFcapParams struct {
-	ID         pgtype.UUID `json:"id"`
-	FreqLimit  int32       `json:"freq_limit"`
-	FreqWindow int32       `json:"freq_window"`
-}
-
-func (q *Queries) ConfigureBrandFcap(ctx context.Context, arg ConfigureBrandFcapParams) error {
-	_, err := q.db.Exec(ctx, configureBrandFcap, arg.ID, arg.FreqLimit, arg.FreqWindow)
-	return err
-}
-
-const getCampaignForUpdate = `-- name: GetCampaignForUpdate :one
-SELECT id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key FROM campaigns
-WHERE id = $1
-FOR UPDATE
-`
-
-func (q *Queries) GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error) {
-	row := q.db.QueryRow(ctx, getCampaignForUpdate, id)
-	var i Campaign
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Status,
-		&i.BudgetLimit,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.CustomerID,
-		&i.CurrentSpend,
-		&i.DeletedAt,
-		&i.PacingMode,
-		&i.DailyBudget,
-		&i.Timezone,
-		&i.FreqLimit,
-		&i.FreqWindow,
-		&i.TargetCountries,
-		&i.BrandID,
-		&i.BrandFcapKey,
-	)
-	return i, err
-}
-
-const updateCampaignPacing = `-- name: UpdateCampaignPacing :one
-UPDATE campaigns
-SET pacing_mode = $2,
-    updated_at = CURRENT_TIMESTAMP
-WHERE id = $1
-RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
-`
-
-type UpdateCampaignPacingParams struct {
-	ID         pgtype.UUID    `json:"id"`
-	PacingMode PacingModeType `json:"pacing_mode"`
-}
-
-func (q *Queries) UpdateCampaignPacing(ctx context.Context, arg UpdateCampaignPacingParams) (Campaign, error) {
-	row := q.db.QueryRow(ctx, updateCampaignPacing, arg.ID, arg.PacingMode)
-	var i Campaign
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Status,
-		&i.BudgetLimit,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.CustomerID,
-		&i.CurrentSpend,
-		&i.DeletedAt,
-		&i.PacingMode,
-		&i.DailyBudget,
-		&i.Timezone,
-		&i.FreqLimit,
-		&i.FreqWindow,
-		&i.TargetCountries,
-		&i.BrandID,
-		&i.BrandFcapKey,
 	)
 	return i, err
 }

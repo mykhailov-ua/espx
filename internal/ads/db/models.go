@@ -262,6 +262,11 @@ type OutboxEvent struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type SyncIdempotency struct {
+	ID        string             `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type SystemSetting struct {
 	Key       string             `json:"key"`
 	Value     string             `json:"value"`
