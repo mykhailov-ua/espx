@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 type budgetArgs struct {
@@ -79,7 +78,7 @@ func NewRedisBudgetManager(rdb redis.Cmdable, repo domain.CampaignRepository, id
 	}
 }
 
-func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, campaignID uuid.UUID, clickID string, amount decimal.Decimal) (bool, error) {
+func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, campaignID uuid.UUID, clickID string, amount int64) (bool, error) {
 	ba := budgetArgsPool.Get().(*budgetArgs)
 	defer budgetArgsPool.Put(ba)
 
@@ -102,7 +101,7 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 	ba.customerIDStr = unsafeString(custIDSlice)
 
 	amountSlice := ba.amountBuf[:0]
-	amountSlice = strconv.AppendInt(amountSlice, DecimalToMicro(amount), 10)
+	amountSlice = strconv.AppendInt(amountSlice, amount, 10)
 	ba.amountStr = unsafeString(amountSlice)
 
 	ttlSlice := ba.ttlBuf[:0]
@@ -135,12 +134,12 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 				return false, fmt.Errorf("failed to load campaign from db on cache miss: %w", err)
 			}
 
-			remaining := camp.BudgetLimit.Sub(camp.CurrentSpend)
-			if remaining.IsNegative() {
-				remaining = decimal.Zero
+			remaining := camp.BudgetLimit - camp.CurrentSpend
+			if remaining < 0 {
+				remaining = 0
 			}
 
-			m.rdb.SetNX(ctx, ba.campaignKey, DecimalToMicro(remaining), 24*time.Hour)
+			m.rdb.SetNX(ctx, ba.campaignKey, remaining, 24*time.Hour)
 			continue
 		}
 
@@ -149,4 +148,3 @@ func (m *RedisBudgetManager) CheckAndSpend(ctx context.Context, customerID, camp
 
 	return false, fmt.Errorf("budget cache miss on retry")
 }
-

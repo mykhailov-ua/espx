@@ -74,7 +74,7 @@ LIMIT $1 OFFSET $2;
 
 
 -- name: GetCustomerStats :many
-SELECT customer_id, COUNT(*) as active_campaigns, COALESCE(SUM(current_spend), 0)::numeric as total_spend
+SELECT customer_id, COUNT(*) as active_campaigns, COALESCE(SUM(current_spend), 0)::bigint as total_spend
 FROM campaigns
 WHERE customer_id = ANY(@customer_ids::uuid[]) AND status = 'ACTIVE'
 GROUP BY customer_id;
@@ -168,7 +168,7 @@ FOR UPDATE SKIP LOCKED;
 SELECT 
     c.id,
     COALESCE(FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - c.created_at)) / 86400), 0)::integer AS age_days,
-    COALESCE(SUM(l.amount), 0.00)::numeric AS topup_sum_30d
+    COALESCE(SUM(l.amount), 0)::bigint AS topup_sum_30d
 FROM customers c
 LEFT JOIN balance_ledger l ON l.customer_id = c.id 
     AND l.type = 'TOPUP' 

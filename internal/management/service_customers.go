@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,8 +32,8 @@ type LedgerDTO struct {
 	CreatedAt       string `json:"created_at"`
 }
 
-func formatNumeric(n pgtype.Numeric) string {
-	return ads.FromNumeric(n).StringFixed(2)
+func formatMicro(m int64) string {
+	return fmt.Sprintf("%.2f", float64(m)/1_000_000.0)
 }
 
 func (s *Service) ListCustomers(ctx context.Context, limit, offset int32) ([]CustomerDTO, int64, error) {
@@ -74,10 +75,10 @@ func (s *Service) ListCustomers(ctx context.Context, limit, offset int32) ([]Cus
 		res[i] = CustomerDTO{
 			ID:              uid.String(),
 			Name:            r.Name,
-			Balance:         formatNumeric(r.Balance),
+			Balance:         formatMicro(r.Balance),
 			Currency:        r.Currency,
 			ActiveCampaigns: st.ActiveCampaigns,
-			TotalSpend:      formatNumeric(st.TotalSpend),
+			TotalSpend:      formatMicro(st.TotalSpend),
 			CreatedAt:       r.CreatedAt.Time.Format(time.RFC3339),
 			UpdatedAt:       r.UpdatedAt.Time.Format(time.RFC3339),
 		}
@@ -106,10 +107,10 @@ func (s *Service) GetCustomerDTO(ctx context.Context, id uuid.UUID) (CustomerDTO
 	return CustomerDTO{
 		ID:              uuid.UUID(r.ID.Bytes).String(),
 		Name:            r.Name,
-		Balance:         formatNumeric(r.Balance),
+		Balance:         formatMicro(r.Balance),
 		Currency:        r.Currency,
 		ActiveCampaigns: st.ActiveCampaigns,
-		TotalSpend:      formatNumeric(st.TotalSpend),
+		TotalSpend:      formatMicro(st.TotalSpend),
 		CreatedAt:       r.CreatedAt.Time.Format(time.RFC3339),
 		UpdatedAt:       r.UpdatedAt.Time.Format(time.RFC3339),
 	}, nil
@@ -145,7 +146,7 @@ func (s *Service) ListCustomerLedger(ctx context.Context, customerID uuid.UUID, 
 			ID:              r.ID,
 			CustomerID:      uuid.UUID(r.CustomerID.Bytes).String(),
 			CampaignID:      campID,
-			Amount:          formatNumeric(r.Amount),
+			Amount:          formatMicro(r.Amount),
 			Type:            string(r.Type),
 			IdempotencyHash: r.IdempotencyHash.String,
 			CreatedAt:       r.CreatedAt.Time.Format(time.RFC3339),

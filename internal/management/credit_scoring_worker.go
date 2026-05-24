@@ -6,9 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/shopspring/decimal"
 )
 
 type CreditScoringWorker struct {
@@ -47,7 +45,7 @@ func (w *CreditScoringWorker) EvaluateAll(ctx context.Context) error {
 	}
 
 	for _, r := range rows {
-		overdraft := w.calculateOverdraft(float64(r.AgeDays), ads.FromNumeric(r.TopupSum30d))
+		overdraft := w.calculateOverdraft(float64(r.AgeDays), r.TopupSum30d)
 		customerID := uuid.UUID(r.ID.Bytes)
 
 		cust, err := queries.GetCustomerByID(ctx, r.ID)
@@ -56,8 +54,8 @@ func (w *CreditScoringWorker) EvaluateAll(ctx context.Context) error {
 			continue
 		}
 
-		currentOverdraft := ads.FromNumeric(cust.AllowedOverdraft)
-		if currentOverdraft.Equal(overdraft) {
+		currentOverdraft := cust.AllowedOverdraft
+		if currentOverdraft == overdraft {
 			continue
 		}
 
@@ -72,21 +70,20 @@ func (w *CreditScoringWorker) EvaluateAll(ctx context.Context) error {
 
 // calculateOverdraft maps payment history and account longevity to a safe allowed overdraft threshold.
 // Multipliers scale based on operational duration to prevent immediate over-allocations on new profiles.
-func (w *CreditScoringWorker) calculateOverdraft(ageDays float64, topupSum decimal.Decimal) decimal.Decimal {
-	if ageDays < 7.0 {
-		return decimal.Zero
+func (w *CreditScoringWorker) calculateOverdraft(ageDays float64, topupSum int64) int64 {
+	if ageDays < w.svc.cfg.CreditScoringMinAgeDays {
+		return 0
 	}
 
-	var multiplier decimal.Decimal
-	if ageDays < 30.0 {
-		multiplier = decimal.NewFromFloat(0.15)
+	var overdraft int64
+	if ageDays < w.svc.cfg.CreditScoringMatureAgeDays {
+		overdraft = topupSum * w.svc.cfg.CreditScoringMidTierPercent / 100
 	} else {
-		multiplier = decimal.NewFromFloat(0.30)
+		overdraft = topupSum * w.svc.cfg.CreditScoringMaturePercent / 100
 	}
 
-	overdraft := topupSum.Mul(multiplier).Round(2)
-	maxCap := decimal.NewFromInt(10000)
-	if overdraft.GreaterThan(maxCap) {
+	maxCap := w.svc.cfg.CreditScoringMaxCap
+	if overdraft > maxCap {
 		overdraft = maxCap
 	}
 

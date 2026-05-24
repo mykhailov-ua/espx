@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 type SyncWorker struct {
@@ -137,7 +136,7 @@ redis.call("DEL", KEYS[4])
 return remaining
 `
 
-func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string, updateFn func(context.Context, uuid.UUID, decimal.Decimal, string) error) {
+func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string, updateFn func(context.Context, uuid.UUID, int64, string) error) {
 	id, err := uuid.Parse(idStr)
 	if err != nil {
 		return
@@ -177,11 +176,9 @@ func (w *SyncWorker) syncEntity(ctx context.Context, prefix string, idStr string
 		return
 	}
 
-	amount := MicroToDecimal(amountMicro)
-
 	// lockKey is intentionally NOT released on updateFn errors. It expires via its TTL to prevent
 	// parallel sync goroutines from racing into the same DB write within the same lock window.
-	if err := updateFn(ctx, id, amount, txIDVal); err == nil {
+	if err := updateFn(ctx, id, amountMicro, txIDVal); err == nil {
 		w.rdb.Eval(ctx, commitSyncScript, []string{inFlightKey, dirtySet, lockKey, txKey, syncKey}, amountMicro, idStr)
 	}
 }

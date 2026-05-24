@@ -200,10 +200,10 @@ RETURNING id, name, balance, currency, created_at, updated_at, allowed_overdraft
 `
 
 type CreateCustomerParams struct {
-	ID       pgtype.UUID    `json:"id"`
-	Name     string         `json:"name"`
-	Balance  pgtype.Numeric `json:"balance"`
-	Currency string         `json:"currency"`
+	ID       pgtype.UUID `json:"id"`
+	Name     string      `json:"name"`
+	Balance  int64       `json:"balance"`
+	Currency string      `json:"currency"`
 }
 
 func (q *Queries) CreateCustomer(ctx context.Context, arg CreateCustomerParams) (Customer, error) {
@@ -233,11 +233,11 @@ RETURNING id, customer_id, campaign_id, amount, type, idempotency_hash, created_
 `
 
 type CreateLedgerEntryParams struct {
-	CustomerID      pgtype.UUID    `json:"customer_id"`
-	CampaignID      pgtype.UUID    `json:"campaign_id"`
-	Amount          pgtype.Numeric `json:"amount"`
-	Type            LedgerType     `json:"type"`
-	IdempotencyHash pgtype.Text    `json:"idempotency_hash"`
+	CustomerID      pgtype.UUID `json:"customer_id"`
+	CampaignID      pgtype.UUID `json:"campaign_id"`
+	Amount          int64       `json:"amount"`
+	Type            LedgerType  `json:"type"`
+	IdempotencyHash pgtype.Text `json:"idempotency_hash"`
 }
 
 func (q *Queries) CreateLedgerEntry(ctx context.Context, arg CreateLedgerEntryParams) (BalanceLedger, error) {
@@ -333,14 +333,14 @@ type GetAllActiveCampaignsWithStatsRow struct {
 	ID               pgtype.UUID        `json:"id"`
 	Name             string             `json:"name"`
 	Status           CampaignStatusType `json:"status"`
-	BudgetLimit      pgtype.Numeric     `json:"budget_limit"`
+	BudgetLimit      int64              `json:"budget_limit"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	CustomerID       pgtype.UUID        `json:"customer_id"`
-	CurrentSpend     pgtype.Numeric     `json:"current_spend"`
+	CurrentSpend     int64              `json:"current_spend"`
 	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
 	PacingMode       PacingModeType     `json:"pacing_mode"`
-	DailyBudget      pgtype.Numeric     `json:"daily_budget"`
+	DailyBudget      int64              `json:"daily_budget"`
 	Timezone         string             `json:"timezone"`
 	FreqLimit        pgtype.Int4        `json:"freq_limit"`
 	FreqWindow       pgtype.Int4        `json:"freq_window"`
@@ -566,14 +566,14 @@ type GetCampaignsWithStatsRow struct {
 	ID               pgtype.UUID        `json:"id"`
 	Name             string             `json:"name"`
 	Status           CampaignStatusType `json:"status"`
-	BudgetLimit      pgtype.Numeric     `json:"budget_limit"`
+	BudgetLimit      int64              `json:"budget_limit"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	CustomerID       pgtype.UUID        `json:"customer_id"`
-	CurrentSpend     pgtype.Numeric     `json:"current_spend"`
+	CurrentSpend     int64              `json:"current_spend"`
 	DeletedAt        pgtype.Timestamptz `json:"deleted_at"`
 	PacingMode       PacingModeType     `json:"pacing_mode"`
-	DailyBudget      pgtype.Numeric     `json:"daily_budget"`
+	DailyBudget      int64              `json:"daily_budget"`
 	Timezone         string             `json:"timezone"`
 	FreqLimit        pgtype.Int4        `json:"freq_limit"`
 	FreqWindow       pgtype.Int4        `json:"freq_window"`
@@ -648,16 +648,16 @@ func (q *Queries) GetCustomerForUpdate(ctx context.Context, id pgtype.UUID) (Cus
 }
 
 const getCustomerStats = `-- name: GetCustomerStats :many
-SELECT customer_id, COUNT(*) as active_campaigns, COALESCE(SUM(current_spend), 0)::numeric as total_spend
+SELECT customer_id, COUNT(*) as active_campaigns, COALESCE(SUM(current_spend), 0)::bigint as total_spend
 FROM campaigns
 WHERE customer_id = ANY($1::uuid[]) AND status = 'ACTIVE'
 GROUP BY customer_id
 `
 
 type GetCustomerStatsRow struct {
-	CustomerID      pgtype.UUID    `json:"customer_id"`
-	ActiveCampaigns int64          `json:"active_campaigns"`
-	TotalSpend      pgtype.Numeric `json:"total_spend"`
+	CustomerID      pgtype.UUID `json:"customer_id"`
+	ActiveCampaigns int64       `json:"active_campaigns"`
+	TotalSpend      int64       `json:"total_spend"`
 }
 
 func (q *Queries) GetCustomerStats(ctx context.Context, customerIds []pgtype.UUID) ([]GetCustomerStatsRow, error) {
@@ -1058,7 +1058,7 @@ const listCustomersForScoring = `-- name: ListCustomersForScoring :many
 SELECT 
     c.id,
     COALESCE(FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - c.created_at)) / 86400), 0)::integer AS age_days,
-    COALESCE(SUM(l.amount), 0.00)::numeric AS topup_sum_30d
+    COALESCE(SUM(l.amount), 0)::bigint AS topup_sum_30d
 FROM customers c
 LEFT JOIN balance_ledger l ON l.customer_id = c.id 
     AND l.type = 'TOPUP' 
@@ -1067,9 +1067,9 @@ GROUP BY c.id
 `
 
 type ListCustomersForScoringRow struct {
-	ID          pgtype.UUID    `json:"id"`
-	AgeDays     int32          `json:"age_days"`
-	TopupSum30d pgtype.Numeric `json:"topup_sum_30d"`
+	ID          pgtype.UUID `json:"id"`
+	AgeDays     int32       `json:"age_days"`
+	TopupSum30d int64       `json:"topup_sum_30d"`
 }
 
 func (q *Queries) ListCustomersForScoring(ctx context.Context) ([]ListCustomersForScoringRow, error) {
@@ -1180,8 +1180,8 @@ RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, c
 `
 
 type UpdateCampaignBudgetParams struct {
-	ID          pgtype.UUID    `json:"id"`
-	BudgetLimit pgtype.Numeric `json:"budget_limit"`
+	ID          pgtype.UUID `json:"id"`
+	BudgetLimit int64       `json:"budget_limit"`
 }
 
 func (q *Queries) UpdateCampaignBudget(ctx context.Context, arg UpdateCampaignBudgetParams) (Campaign, error) {
@@ -1294,8 +1294,8 @@ RETURNING id, name, balance, currency, created_at, updated_at, allowed_overdraft
 `
 
 type UpdateCustomerBalanceManagementParams struct {
-	ID      pgtype.UUID    `json:"id"`
-	Balance pgtype.Numeric `json:"balance"`
+	ID      pgtype.UUID `json:"id"`
+	Balance int64       `json:"balance"`
 }
 
 func (q *Queries) UpdateCustomerBalanceManagement(ctx context.Context, arg UpdateCustomerBalanceManagementParams) (Customer, error) {
@@ -1322,8 +1322,8 @@ RETURNING id, name, balance, currency, created_at, updated_at, allowed_overdraft
 `
 
 type UpdateCustomerOverdraftParams struct {
-	ID               pgtype.UUID    `json:"id"`
-	AllowedOverdraft pgtype.Numeric `json:"allowed_overdraft"`
+	ID               pgtype.UUID `json:"id"`
+	AllowedOverdraft int64       `json:"allowed_overdraft"`
 }
 
 func (q *Queries) UpdateCustomerOverdraft(ctx context.Context, arg UpdateCustomerOverdraftParams) (Customer, error) {

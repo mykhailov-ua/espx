@@ -20,11 +20,11 @@ RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, c
 type CreateCampaignParams struct {
 	ID              pgtype.UUID        `json:"id"`
 	Name            string             `json:"name"`
-	BudgetLimit     pgtype.Numeric     `json:"budget_limit"`
+	BudgetLimit     int64              `json:"budget_limit"`
 	Status          CampaignStatusType `json:"status"`
 	CustomerID      pgtype.UUID        `json:"customer_id"`
 	PacingMode      PacingModeType     `json:"pacing_mode"`
-	DailyBudget     pgtype.Numeric     `json:"daily_budget"`
+	DailyBudget     int64              `json:"daily_budget"`
 	Timezone        string             `json:"timezone"`
 	FreqLimit       pgtype.Int4        `json:"freq_limit"`
 	FreqWindow      pgtype.Int4        `json:"freq_window"`

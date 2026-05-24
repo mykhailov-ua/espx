@@ -168,7 +168,7 @@ type BalanceLedger struct {
 	ID              int64            `json:"id"`
 	CustomerID      pgtype.UUID      `json:"customer_id"`
 	CampaignID      pgtype.UUID      `json:"campaign_id"`
-	Amount          pgtype.Numeric   `json:"amount"`
+	Amount          int64            `json:"amount"`
 	Type            LedgerType       `json:"type"`
 	IdempotencyHash pgtype.Text      `json:"idempotency_hash"`
 	CreatedAt       pgtype.Timestamp `json:"created_at"`
@@ -178,14 +178,14 @@ type Campaign struct {
 	ID           pgtype.UUID        `json:"id"`
 	Name         string             `json:"name"`
 	Status       CampaignStatusType `json:"status"`
-	BudgetLimit  pgtype.Numeric     `json:"budget_limit"`
+	BudgetLimit  int64              `json:"budget_limit"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	CustomerID   pgtype.UUID        `json:"customer_id"`
-	CurrentSpend pgtype.Numeric     `json:"current_spend"`
+	CurrentSpend int64              `json:"current_spend"`
 	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
 	PacingMode   PacingModeType     `json:"pacing_mode"`
-	DailyBudget  pgtype.Numeric     `json:"daily_budget"`
+	DailyBudget  int64              `json:"daily_budget"`
 	Timezone     string             `json:"timezone"`
 	// Max events per user. 0 means unlimited.
 	FreqLimit pgtype.Int4 `json:"freq_limit"`
@@ -217,11 +217,11 @@ type CampaignStatusHistory struct {
 type Customer struct {
 	ID               pgtype.UUID        `json:"id"`
 	Name             string             `json:"name"`
-	Balance          pgtype.Numeric     `json:"balance"`
+	Balance          int64              `json:"balance"`
 	Currency         string             `json:"currency"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	AllowedOverdraft pgtype.Numeric     `json:"allowed_overdraft"`
+	AllowedOverdraft int64              `json:"allowed_overdraft"`
 }
 
 type Event struct {

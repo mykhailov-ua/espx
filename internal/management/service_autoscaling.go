@@ -8,9 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/shopspring/decimal"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 )
 
 // AutoscaleBudgets coordinates budget shifts from low CTR to high CTR campaigns under the same customer.
@@ -51,18 +50,18 @@ func (s *Service) AutoscaleBudgets(ctx context.Context, syncWorkers []*ads.SyncW
 				}
 				ctr := float64(c.TotalClicks) / float64(c.TotalImpressions)
 
-				if ctr > 0.015 && c.TotalImpressions > 100 {
+				if ctr > s.cfg.AutoscaleHighCTRThreshold && c.TotalImpressions > s.cfg.AutoscaleMinImpressions {
 					if ctr > bestCTR {
 						bestCTR = ctr
 						bestCamp = c
 					}
 				}
 
-				limit := ads.FromNumeric(c.BudgetLimit)
-				spend := ads.FromNumeric(c.CurrentSpend)
-				remaining := limit.Sub(spend)
+				limit := c.BudgetLimit
+				spend := c.CurrentSpend
+				remaining := limit - spend
 
-				if ctr < 0.005 && remaining.GreaterThanOrEqual(decimal.NewFromInt(20)) {
+				if ctr < s.cfg.AutoscaleLowCTRThreshold && remaining >= s.cfg.AutoscaleMinRemainingBudget {
 					if ctr < worstCTR {
 						worstCTR = ctr
 						worstCamp = c
@@ -78,50 +77,55 @@ func (s *Service) AutoscaleBudgets(ctx context.Context, syncWorkers []*ads.SyncW
 					continue
 				}
 
-				shiftAmount := decimal.NewFromInt(10)
-				worstLimit := ads.FromNumeric(worstCamp.BudgetLimit)
-				bestLimit := ads.FromNumeric(bestCamp.BudgetLimit)
+				shiftAmount := s.cfg.AutoscaleShiftAmount
+				worstLimit := worstCamp.BudgetLimit
+				bestLimit := bestCamp.BudgetLimit
 
-				newWorstLimit := worstLimit.Sub(shiftAmount)
-				newBestLimit := bestLimit.Add(shiftAmount)
+				newWorstLimit := worstLimit - shiftAmount
+				newBestLimit := bestLimit + shiftAmount
 
 				_, err = q.UpdateCampaignBudget(ctx, db.UpdateCampaignBudgetParams{
-					ID:          ads.ToUUID(worstID),
-					BudgetLimit: ads.ToNumeric(newWorstLimit),
+					ID:          worstCamp.ID,
+					BudgetLimit: newWorstLimit,
 				})
 				if err != nil {
 					return fmt.Errorf("failed to decrease budget for campaign %s: %w", worstID, err)
 				}
 
 				_, err = q.UpdateCampaignBudget(ctx, db.UpdateCampaignBudgetParams{
-					ID:          ads.ToUUID(bestID),
-					BudgetLimit: ads.ToNumeric(newBestLimit),
+					ID:          bestCamp.ID,
+					BudgetLimit: newBestLimit,
 				})
 				if err != nil {
 					return fmt.Errorf("failed to increase budget for campaign %s: %w", bestID, err)
 				}
 
+				worstLimitStr := fmt.Sprintf("%.2f", float64(worstLimit)/1_000_000.0)
+				newWorstLimitStr := fmt.Sprintf("%.2f", float64(newWorstLimit)/1_000_000.0)
+				bestLimitStr := fmt.Sprintf("%.2f", float64(bestLimit)/1_000_000.0)
+				newBestLimitStr := fmt.Sprintf("%.2f", float64(newBestLimit)/1_000_000.0)
+
 				s.AuditLog(ctx, q, uuid.Nil, "AUTOSCALE_BUDGET_TRANSFER", "campaign", &worstID, map[string]any{
-					"old_budget": worstLimit.StringFixed(2),
-					"new_budget": newWorstLimit.StringFixed(2),
+					"old_budget": worstLimitStr,
+					"new_budget": newWorstLimitStr,
 					"ctr":        worstCTR,
 					"target":     bestID.String(),
 				}, nil)
 
 				s.AuditLog(ctx, q, uuid.Nil, "AUTOSCALE_BUDGET_TRANSFER", "campaign", &bestID, map[string]any{
-					"old_budget": bestLimit.StringFixed(2),
-					"new_budget": newBestLimit.StringFixed(2),
+					"old_budget": bestLimitStr,
+					"new_budget": newBestLimitStr,
 					"ctr":        bestCTR,
 					"source":     worstID.String(),
 				}, nil)
 
 				worstPayload, _ := json.Marshal(CampaignPayload{
 					CampaignID:  worstID.String(),
-					BudgetLimit: newWorstLimit.StringFixed(2),
+					BudgetLimit: newWorstLimit,
 				})
 				bestPayload, _ := json.Marshal(CampaignPayload{
 					CampaignID:  bestID.String(),
-					BudgetLimit: newBestLimit.StringFixed(2),
+					BudgetLimit: newBestLimit,
 				})
 
 				_, err = q.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{

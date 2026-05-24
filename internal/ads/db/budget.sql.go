@@ -23,10 +23,10 @@ WHERE c.id = $1 LIMIT 1
 type GetCampaignBudgetRow struct {
 	ID              pgtype.UUID        `json:"id"`
 	CustomerID      pgtype.UUID        `json:"customer_id"`
-	BudgetLimit     pgtype.Numeric     `json:"budget_limit"`
-	CurrentSpend    pgtype.Numeric     `json:"current_spend"`
+	BudgetLimit     int64              `json:"budget_limit"`
+	CurrentSpend    int64              `json:"current_spend"`
 	Status          CampaignStatusType `json:"status"`
-	CustomerBalance pgtype.Numeric     `json:"customer_balance"`
+	CustomerBalance int64              `json:"customer_balance"`
 }
 
 func (q *Queries) GetCampaignBudget(ctx context.Context, id pgtype.UUID) (GetCampaignBudgetRow, error) {
@@ -116,8 +116,8 @@ WHERE id = $1
 `
 
 type UpdateCampaignSpendParams struct {
-	ID           pgtype.UUID    `json:"id"`
-	CurrentSpend pgtype.Numeric `json:"current_spend"`
+	ID           pgtype.UUID `json:"id"`
+	CurrentSpend int64       `json:"current_spend"`
 }
 
 func (q *Queries) UpdateCampaignSpend(ctx context.Context, arg UpdateCampaignSpendParams) error {
@@ -133,8 +133,8 @@ WHERE id = $1
 `
 
 type UpdateCustomerBalanceParams struct {
-	ID      pgtype.UUID    `json:"id"`
-	Balance pgtype.Numeric `json:"balance"`
+	ID      pgtype.UUID `json:"id"`
+	Balance int64       `json:"balance"`
 }
 
 func (q *Queries) UpdateCustomerBalance(ctx context.Context, arg UpdateCustomerBalanceParams) error {

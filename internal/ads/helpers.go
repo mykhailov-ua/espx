@@ -2,7 +2,6 @@ package ads
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -10,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/shopspring/decimal"
 )
 
 func ToUUID(u uuid.UUID) pgtype.UUID {
@@ -18,104 +16,6 @@ func ToUUID(u uuid.UUID) pgtype.UUID {
 }
 
 const MicroUnitFactor = 1_000_000
-
-var pow10 = [...]int64{
-	1,                  // 10^0
-	10,                 // 10^1
-	100,                // 10^2
-	1000,               // 10^3
-	10000,              // 10^4
-	100000,             // 10^5
-	1000000,            // 10^6
-	10000000,           // 10^7
-	100000000,          // 10^8
-	1000000000,         // 10^9
-	10000000000,        // 10^10
-	100000000000,       // 10^11
-	1000000000000,      // 10^12
-	10000000000000,     // 10^13
-	100000000000000,    // 10^14
-	1000000000000000,   // 10^15
-	10000000000000000,  // 10^16
-	100000000000000000, // 10^17
-	1000000000000000000,// 10^18
-}
-
-func DecimalToMicro(d decimal.Decimal) int64 {
-	val := d.CoefficientInt64()
-	exp := d.Exponent()
-	shift := exp + 6
-	if shift >= 0 && shift < int32(len(pow10)) {
-		return val * pow10[shift]
-	} else if shift < 0 && -shift < int32(len(pow10)) {
-		return val / pow10[-shift]
-	}
-	// Fallback to slow path if coefficient exceeds int64
-	return d.Mul(decimal.NewFromInt(MicroUnitFactor)).IntPart()
-}
-
-func MicroToDecimal(m int64) decimal.Decimal {
-	return decimal.NewFromInt(m).Div(decimal.NewFromInt(MicroUnitFactor))
-}
-
-func ToNumeric(d decimal.Decimal) pgtype.Numeric {
-	n := pgtype.Numeric{}
-	if err := n.Scan(d.StringFixed(2)); err != nil {
-		panic(fmt.Sprintf("failed to scan decimal to numeric: %v", err))
-	}
-	return n
-}
-
-func FromNumeric(n pgtype.Numeric) decimal.Decimal {
-	f, err := n.Float64Value()
-	if err != nil || !f.Valid {
-		return decimal.Zero
-	}
-	return decimal.NewFromFloat(f.Float64)
-}
-
-func NumericToMicro(n pgtype.Numeric) int64 {
-	if !n.Valid || n.Int == nil {
-		return 0
-	}
-	targetExp := n.Exp + 6
-	if targetExp >= 0 {
-		if n.Int.IsInt64() {
-			val := n.Int.Int64()
-			multiplier := int64(1)
-			for i := int32(0); i < targetExp; i++ {
-				if multiplier > 922337203685477580 {
-					return 0
-				}
-				multiplier *= 10
-			}
-			if val > 0 && val > 9223372036854775807/multiplier {
-				return 0
-			}
-			if val < 0 && val < (-9223372036854775807-1)/multiplier {
-				return 0
-			}
-			return val * multiplier
-		}
-	} else {
-		if n.Int.IsInt64() {
-			val := n.Int.Int64()
-			divisor := int64(1)
-			for i := int32(0); i < -targetExp; i++ {
-				if divisor > 922337203685477580 {
-					return 0
-				}
-				divisor *= 10
-			}
-			return val / divisor
-		}
-	}
-	f, err := n.Float64Value()
-	if err != nil || !f.Valid {
-		return 0
-	}
-	return int64(f.Float64 * 1000000)
-}
 
 func SliceToMap(slice []string) map[string]struct{} {
 	if slice == nil {
@@ -150,11 +50,11 @@ func (r *CampaignRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Campa
 	return &domain.Campaign{
 		ID:              id,
 		CustomerID:      uuid.UUID(row.CustomerID.Bytes),
-		BudgetLimit:     FromNumeric(row.BudgetLimit),
-		CurrentSpend:    FromNumeric(row.CurrentSpend),
+		BudgetLimit:     row.BudgetLimit,
+		CurrentSpend:    row.CurrentSpend,
 		Status:          domain.CampaignStatus(row.Status),
 		PacingMode:      domain.PacingMode(row.PacingMode),
-		DailyBudget:     FromNumeric(row.DailyBudget),
+		DailyBudget:     row.DailyBudget,
 		Timezone:        row.Timezone,
 		Location:        loc,
 		FreqLimit:       row.FreqLimit.Int32,
@@ -171,7 +71,7 @@ func (r *CampaignRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status do
 	return err
 }
 
-func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txID string) error {
+func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount int64, txID string) error {
 	var dbtx db.DBTX
 	if getter, ok := r.queries.(interface{ DB() db.DBTX }); ok {
 		dbtx = getter.DB()
@@ -180,7 +80,7 @@ func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount dec
 	if dbtx == nil {
 		return r.queries.UpdateCampaignSpend(ctx, db.UpdateCampaignSpendParams{
 			ID:           pgtype.UUID{Bytes: id, Valid: true},
-			CurrentSpend: ToNumeric(amount),
+			CurrentSpend: amount,
 		})
 	}
 
@@ -217,7 +117,7 @@ func (r *CampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount dec
 
 	err = q.UpdateCampaignSpend(ctx, db.UpdateCampaignSpendParams{
 		ID:           pgtype.UUID{Bytes: id, Valid: true},
-		CurrentSpend: ToNumeric(amount),
+		CurrentSpend: amount,
 	})
 	if err != nil {
 		return err
@@ -246,11 +146,11 @@ func (r *CampaignRepo) ListActive(ctx context.Context) ([]*domain.Campaign, erro
 			ID:              uuid.UUID(row.ID.Bytes),
 			CustomerID:      uuid.UUID(row.CustomerID.Bytes),
 			Name:            row.Name,
-			BudgetLimit:     FromNumeric(row.BudgetLimit),
-			CurrentSpend:    FromNumeric(row.CurrentSpend),
+			BudgetLimit:     row.BudgetLimit,
+			CurrentSpend:    row.CurrentSpend,
 			Status:          domain.CampaignStatus(row.Status),
 			PacingMode:      domain.PacingMode(row.PacingMode),
-			DailyBudget:     FromNumeric(row.DailyBudget),
+			DailyBudget:     row.DailyBudget,
 			Timezone:        row.Timezone,
 			Location:        loc,
 			FreqLimit:       row.FreqLimit.Int32,
@@ -278,12 +178,12 @@ func (r *CustomerRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Custo
 	return &domain.Customer{
 		ID:       id,
 		Name:     row.Name,
-		Balance:  FromNumeric(row.Balance),
+		Balance:  row.Balance,
 		Currency: row.Currency,
 	}, nil
 }
 
-func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txID string) error {
+func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount int64, txID string) error {
 	var dbtx db.DBTX
 	if getter, ok := r.queries.(interface{ DB() db.DBTX }); ok {
 		dbtx = getter.DB()
@@ -292,7 +192,7 @@ func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount d
 	if dbtx == nil {
 		return r.queries.UpdateCustomerBalance(ctx, db.UpdateCustomerBalanceParams{
 			ID:      pgtype.UUID{Bytes: id, Valid: true},
-			Balance: ToNumeric(amount),
+			Balance: amount,
 		})
 	}
 
@@ -329,7 +229,7 @@ func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount d
 
 	err = q.UpdateCustomerBalance(ctx, db.UpdateCustomerBalanceParams{
 		ID:      pgtype.UUID{Bytes: id, Valid: true},
-		Balance: ToNumeric(amount),
+		Balance: amount,
 	})
 	if err != nil {
 		return err

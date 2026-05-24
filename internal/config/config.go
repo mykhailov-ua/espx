@@ -6,8 +6,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/shopspring/decimal"
 )
 
 type Secret string
@@ -34,8 +32,8 @@ type Config struct {
 	TrustedProxies          []string
 	TokenSymmetricKey       Secret
 	MaxRequestBodySize      int64
-	ClickAmount             decimal.Decimal
-	ImpressionAmount        decimal.Decimal
+	ClickAmount             int64
+	ImpressionAmount        int64
 	EventBatchSize          int
 	EventFlushMs            int
 	StatsFlushMs            int
@@ -78,6 +76,20 @@ type Config struct {
 	}
 	CampaignUpdateChannel string
 
+	AutoscaleHighCTRThreshold   float64
+	AutoscaleMinImpressions     int64
+	AutoscaleLowCTRThreshold    float64
+	AutoscaleMinRemainingBudget int64
+	AutoscaleShiftAmount        int64
+
+	PacingToleranceMargin float64
+
+	CreditScoringMinAgeDays      float64
+	CreditScoringMatureAgeDays   float64
+	CreditScoringMidTierPercent  int64
+	CreditScoringMaturePercent   int64
+	CreditScoringMaxCap          int64
+
 	Lifecycle struct {
 		ShutdownTimeoutMs int
 		DrainTimeoutMs    int
@@ -103,10 +115,10 @@ func getEnvFloat(key string, fallback float64) float64 {
 	return fallback
 }
 
-func getEnvDecimal(key string, fallback decimal.Decimal) decimal.Decimal {
+func getEnvMicro(key string, fallback int64) int64 {
 	if value, ok := os.LookupEnv(key); ok {
-		if decVal, err := decimal.NewFromString(value); err == nil {
-			return decVal
+		if floatVal, err := strconv.ParseFloat(value, 64); err == nil {
+			return int64(floatVal * 1_000_000)
 		}
 	}
 	return fallback
@@ -162,8 +174,8 @@ func Load() (*Config, error) {
 		HttpWriteTimeoutMs:      getEnvInt("HTTP_WRITE_TIMEOUT_MS", 10000),
 		HttpIdleTimeoutMs:       getEnvInt("HTTP_IDLE_TIMEOUT_MS", 30000),
 		DefaultTokenDurationHrs: getEnvInt("DEFAULT_TOKEN_DURATION_HRS", 24),
-		ClickAmount:             getEnvDecimal("CLICK_AMOUNT", decimal.NewFromFloat(0.10)),
-		ImpressionAmount:        getEnvDecimal("IMPRESSION_AMOUNT", decimal.NewFromFloat(0.01)),
+		ClickAmount:             getEnvMicro("CLICK_AMOUNT", 100_000),
+		ImpressionAmount:        getEnvMicro("IMPRESSION_AMOUNT", 10_000),
 		StreamMaxLen:            getEnvInt("STREAM_MAX_LEN", 100000),
 		RetryInitialWaitMs:      getEnvInt("RETRY_INITIAL_WAIT_MS", 100),
 		RetryMaxWaitMs:          getEnvInt("RETRY_MAX_WAIT_MS", 5000),
@@ -179,6 +191,17 @@ func Load() (*Config, error) {
 		Env:                     os.Getenv("ENV"),
 		AuthMetricsPort:         os.Getenv("AUTH_METRICS_PORT"),
 		CampaignUpdateChannel:   os.Getenv("CAMPAIGN_UPDATE_CHANNEL"),
+		AutoscaleHighCTRThreshold:   getEnvFloat("AUTOSCALE_HIGH_CTR_THRESHOLD", 0.015),
+		AutoscaleMinImpressions:     getEnvInt64("AUTOSCALE_MIN_IMPRESSIONS", 100),
+		AutoscaleLowCTRThreshold:    getEnvFloat("AUTOSCALE_LOW_CTR_THRESHOLD", 0.005),
+		AutoscaleMinRemainingBudget: getEnvMicro("AUTOSCALE_MIN_REMAINING_BUDGET", 20.0),
+		AutoscaleShiftAmount:        getEnvMicro("AUTOSCALE_SHIFT_AMOUNT", 10.0),
+		PacingToleranceMargin:       getEnvFloat("PACING_TOLERANCE_MARGIN", 0.15),
+		CreditScoringMinAgeDays:      getEnvFloat("CREDIT_SCORING_MIN_AGE_DAYS", 7.0),
+		CreditScoringMatureAgeDays:   getEnvFloat("CREDIT_SCORING_MATURE_AGE_DAYS", 30.0),
+		CreditScoringMidTierPercent:  getEnvInt64("CREDIT_SCORING_MID_TIER_PERCENT", 15),
+		CreditScoringMaturePercent:   getEnvInt64("CREDIT_SCORING_MATURE_PERCENT", 30),
+		CreditScoringMaxCap:          getEnvMicro("CREDIT_SCORING_MAX_CAP", 10000.0),
 	}
 
 	if len(cfg.AllowedOrigins) == 1 && cfg.AllowedOrigins[0] == "" {

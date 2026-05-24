@@ -57,11 +57,15 @@ func main() {
 
 	lockoutLimiter := auth.NewLockoutLimiter(rdb)
 
-	hasher := auth.NewPasswordHasher(
+	hasher, err := auth.NewPasswordHasher(
 		uint32(cfg.Argon2Memory),
 		uint32(cfg.Argon2Iterations),
 		uint8(cfg.Argon2Parallelism),
 	)
+	if err != nil {
+		slog.Error("failed to pre-compute dummy hash during password hasher initialization", "error", err)
+		os.Exit(1)
+	}
 	authService := auth.NewService(repo, tokenMaker, hasher, lockoutLimiter, rdb)
 	cleanupWorker := auth.NewSessionCleanupWorker(authService)
 	go cleanupWorker.Start(ctx, time.Minute)

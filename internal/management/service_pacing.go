@@ -53,24 +53,23 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 
 			// Perform pacing arithmetic strictly using micro-units int64 values.
 			// This completely bypasses decimal.Decimal heap allocations and float parsing on the core loop.
-			budgetMicro := ads.NumericToMicro(row.DailyBudget)
+			budgetMicro := row.DailyBudget
 			if budgetMicro == 0 {
-				budgetMicro = ads.NumericToMicro(row.BudgetLimit)
+				budgetMicro = row.BudgetLimit
 			}
 			if budgetMicro == 0 {
 				continue
 			}
 
-			actualSpendMicro := ads.NumericToMicro(row.CurrentSpend)
+			actualSpendMicro := row.CurrentSpend
 			expectedSpendMicro := int64(float64(budgetMicro) * timeRatio)
 
 			var targetPacing db.PacingModeType
 			var shouldUpdate bool
 
-			// Apply a 15% tolerance margin using integer scaling factor multiplication.
-			// This avoids float conversions and rounds calculations natively inside CPU registers.
-			overThresholdMicro := int64(float64(expectedSpendMicro) * 1.15)
-			underThresholdMicro := int64(float64(expectedSpendMicro) * 0.85)
+			// Apply configured tolerance margin using integer scaling factor multiplication.
+			overThresholdMicro := int64(float64(expectedSpendMicro) * (1.0 + s.cfg.PacingToleranceMargin))
+			underThresholdMicro := int64(float64(expectedSpendMicro) * (1.0 - s.cfg.PacingToleranceMargin))
 
 			if row.PacingMode == db.PacingModeTypeASAP && actualSpendMicro > overThresholdMicro {
 				targetPacing = db.PacingModeTypeEVEN
@@ -90,14 +89,14 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 					return fmt.Errorf("failed to update pacing mode: %w", err)
 				}
 
-				actualSpend := ads.MicroToDecimal(actualSpendMicro)
-				expectedSpend := ads.MicroToDecimal(expectedSpendMicro)
+				actualSpendStr := fmt.Sprintf("%.2f", float64(actualSpendMicro)/1_000_000.0)
+				expectedSpendStr := fmt.Sprintf("%.2f", float64(expectedSpendMicro)/1_000_000.0)
 
 				s.AuditLog(ctx, q, uuid.Nil, "PACING_LOOP_ADJUSTMENT", "campaign", &campID, map[string]any{
 					"old_pacing": string(row.PacingMode),
 					"new_pacing": string(targetPacing),
-					"spend":      actualSpend.StringFixed(2),
-					"expected":   expectedSpend.StringFixed(2),
+					"spend":      actualSpendStr,
+					"expected":   expectedSpendStr,
 				}, nil)
 
 				payloadBytes, err := json.Marshal(map[string]any{
@@ -120,8 +119,8 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 					"campaign_id", campID,
 					"old_pacing", row.PacingMode,
 					"new_pacing", targetPacing,
-					"actual_spend", actualSpend,
-					"expected_spend", expectedSpend,
+					"actual_spend", actualSpendStr,
+					"expected_spend", expectedSpendStr,
 				)
 			}
 		}
