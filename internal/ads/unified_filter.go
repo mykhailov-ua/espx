@@ -14,7 +14,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 //go:embed unified_filter.lua
@@ -185,13 +184,11 @@ func NewUnifiedFilter(
 	rateLimitWindow time.Duration,
 	dupTTL time.Duration,
 	idempotencyTTL time.Duration,
-	clickAmount decimal.Decimal,
-	impressionAmount decimal.Decimal,
+	clickAmount int64,
+	impressionAmount int64,
 	streamName string,
 	maxStreamLen int,
 ) *UnifiedFilter {
-	clickMicro := DecimalToMicro(clickAmount)
-	impMicro := DecimalToMicro(impressionAmount)
 	return &UnifiedFilter{
 		rdbs:                     rdbs,
 		sharder:                  sharder,
@@ -202,8 +199,8 @@ func NewUnifiedFilter(
 		rateLimitWindow:          rateLimitWindow,
 		dupTTL:                   dupTTL,
 		idempotencyTTL:           idempotencyTTL,
-		clickAmountMicro:         clickMicro,
-		impressionAmountMicro:    impMicro,
+		clickAmountMicro:         clickAmount,
+		impressionAmountMicro:    impressionAmount,
 		streamName:               streamName,
 		maxStreamLen:             maxStreamLen,
 		rateLimitWindowAny:       int(rateLimitWindow.Seconds()),
@@ -211,8 +208,8 @@ func NewUnifiedFilter(
 		dupTTLAny:                int(dupTTL.Seconds()),
 		idempotencyTTLAny:        int(idempotencyTTL.Seconds()),
 		maxStreamLenAny:          maxStreamLen,
-		clickAmountMicroAny:      clickMicro,
-		impressionAmountMicroAny: impMicro,
+		clickAmountMicroAny:      clickAmount,
+		impressionAmountMicroAny: impressionAmount,
 	}
 }
 
@@ -444,12 +441,12 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 				return fmt.Errorf("failed to load campaign from db: %w", err)
 			}
 
-			remaining := camp.BudgetLimit.Sub(camp.CurrentSpend)
-			if remaining.IsNegative() {
-				remaining = decimal.Zero
+			remaining := camp.BudgetLimit - camp.CurrentSpend
+			if remaining < 0 {
+				remaining = 0
 			}
 
-			rdb.SetNX(ctx, budgetSourceKey, DecimalToMicro(remaining), 24*time.Hour)
+			rdb.SetNX(ctx, budgetSourceKey, remaining, 24*time.Hour)
 			continue
 		}
 
