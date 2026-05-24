@@ -282,6 +282,7 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 	err := p.flushBatch(ctx, *batch, *msgIDs)
 	if err == nil {
 		p.recordSuccess(workerID)
+		_ = p.rdb.HDel(ctx, "ad:events:retries", (*msgIDs)...).Err()
 		for _, e := range *batch {
 			domain.EventPool.Put(e)
 		}
@@ -303,21 +304,45 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 	*retryCount++
 	p.recordFailure(workerID)
 
-	if *retryCount > p.maxRetries {
+	pipe := p.rdb.Pipeline()
+	incrCmds := make([]*redis.IntCmd, len(*msgIDs))
+	for i, id := range *msgIDs {
+		incrCmds[i] = pipe.HIncrBy(ctx, "ad:events:retries", id, 1)
+	}
+	_, _ = pipe.Exec(ctx)
+
+	hasPoisonPill := false
+	maxIncr := int64(0)
+	for i := range *msgIDs {
+		cVal, _ := incrCmds[i].Result()
+		if cVal > maxIncr {
+			maxIncr = cVal
+		}
+		if cVal > int64(p.maxRetries) {
+			hasPoisonPill = true
+		}
+	}
+
+	if maxIncr > int64(*retryCount) {
+		*retryCount = int(maxIncr)
+	}
+
+	if hasPoisonPill {
 		slog.Error("poison pill detected, decomposing batch", "error", err, "group", p.groupName, "worker", workerID)
 
-		var failedIndices []int
-		var successfulMsgIDs []string
+		failedIndices := make([]int, 0, len(*batch))
+		successfulMsgIDs := make([]string, 0, len(*batch))
+		singleBatch := make([]*domain.Event, 1)
 
 		for i, e := range *batch {
-			singleBatch := []*domain.Event{e}
-
-			select {
-			case <-ctx.Done():
-				return
-			default:
+			if ctx.Err() != nil {
+				for j := i; j < len(*batch); j++ {
+					failedIndices = append(failedIndices, j)
+				}
+				break
 			}
 
+			singleBatch[0] = e
 			singleCtx, singleCancel := context.WithTimeout(ctx, p.writeTimeout)
 			if singleErr := p.store.StoreBatch(singleCtx, singleBatch); singleErr != nil {
 				singleCancel()
@@ -331,6 +356,7 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 		if len(successfulMsgIDs) > 0 {
 			ackCtx, ackCancel := context.WithTimeout(context.Background(), p.writeTimeout)
 			_ = p.rdb.XAck(ackCtx, p.streamName, p.groupName, successfulMsgIDs...).Err()
+			_ = p.rdb.HDel(ackCtx, "ad:events:retries", successfulMsgIDs...).Err()
 			ackCancel()
 		}
 
@@ -352,15 +378,11 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 					newBatch = append(newBatch, (*batch)[i])
 					newMsgIDs = append(newMsgIDs, (*msgIDs)[i])
 				}
+				fiIdx := 0
 				for i, e := range *batch {
-					isFailed := false
-					for _, fi := range failedIndices {
-						if i == fi {
-							isFailed = true
-							break
-						}
-					}
-					if !isFailed {
+					if fiIdx < len(failedIndices) && i == failedIndices[fiIdx] {
+						fiIdx++
+					} else {
 						domain.EventPool.Put(e)
 					}
 				}
@@ -406,7 +428,7 @@ func (p *StreamConsumer) moveToDLQ(ctx context.Context, batch []*domain.Event, m
 
 	writtenMsgIDs := make([]string, 0, len(batch))
 
-	execCtx, execCancel := context.WithTimeout(ctx, p.writeTimeout)
+	execCtx, execCancel := context.WithTimeout(context.Background(), p.writeTimeout)
 	defer execCancel()
 
 	for i, e := range batch {
@@ -464,9 +486,9 @@ func (p *StreamConsumer) moveToDLQ(ctx context.Context, batch []*domain.Event, m
 
 	// Step 2: For every successfully written message, send XAck and XDel to clean up the main stream
 	pipeAck := p.rdb.Pipeline()
-	var ackedMsgIDs []string
+	ackedMsgIDs := make([]string, 0, len(batch))
 
-	ackCtx, ackCancel := context.WithTimeout(ctx, p.writeTimeout)
+	ackCtx, ackCancel := context.WithTimeout(context.Background(), p.writeTimeout)
 	defer ackCancel()
 
 	for i, cmder := range cmders {
@@ -621,6 +643,7 @@ func (p *StreamConsumer) recoverPending(ctx context.Context, consumerID string) 
 					p.recordFailure(consumerID)
 					slog.Error("recovery flush failed, moving to DLQ", "error", err, "group", p.groupName)
 					_ = p.moveToDLQ(ctx, batch, msgIDs, consumerID, 1, fmt.Errorf("recovery flush failed: %w", err))
+					_ = p.rdb.HDel(ctx, "ad:events:retries", msgIDs...).Err()
 				}
 				for _, e := range batch {
 					domain.EventPool.Put(e)
@@ -628,6 +651,7 @@ func (p *StreamConsumer) recoverPending(ctx context.Context, consumerID string) 
 				return
 			}
 			p.recordSuccess(consumerID)
+			_ = p.rdb.HDel(ctx, "ad:events:retries", msgIDs...).Err()
 			for _, e := range batch {
 				domain.EventPool.Put(e)
 			}
