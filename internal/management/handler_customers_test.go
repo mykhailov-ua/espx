@@ -11,7 +11,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,11 +38,11 @@ func TestManagementAPI_Customers(t *testing.T) {
 
 	// Create test customer
 	custID := uuid.New()
-	err := svc.CreateCustomer(context.Background(), custID, "Acme Corp", decimal.NewFromFloat(150.50), "USD")
+	err := svc.CreateCustomer(context.Background(), custID, "Acme Corp", 150_500_000, "USD")
 	require.NoError(t, err)
 
 	// Topup to create ledger entry
-	err = svc.TopUpBalance(context.Background(), custID, decimal.NewFromFloat(50.00), "idemp-hash-1")
+	err = svc.TopUpBalance(context.Background(), custID, 50_000_000, "idemp-hash-1")
 	require.NoError(t, err)
 
 	t.Run("ListCustomers", func(t *testing.T) {

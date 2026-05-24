@@ -96,7 +96,8 @@ func (m *mockTokenMaker) VerifyToken(t string) (*Payload, error) {
 
 func TestRegister(t *testing.T) {
 	repo := &mockRepo{}
-	hasher := NewPasswordHasher(65536, 3, 4)
+	hasher, err := NewPasswordHasher(65536, 3, 4)
+	assert.NoError(t, err)
 	service := NewService(repo, nil, hasher, nil, nil)
 
 	t.Run("Success", func(t *testing.T) {
@@ -150,7 +151,8 @@ func TestRegister(t *testing.T) {
 func TestLogin(t *testing.T) {
 	repo := &mockRepo{}
 	tokenMaker := &mockTokenMaker{}
-	hasher := NewPasswordHasher(65536, 3, 4)
+	hasher, err := NewPasswordHasher(65536, 3, 4)
+	assert.NoError(t, err)
 	service := NewService(repo, tokenMaker, hasher, nil, nil)
 
 	password := "Password123!"
@@ -324,7 +326,8 @@ func TestLoginFlood(t *testing.T) {
 	rdb, cleanup := database.SetupTestRedis(t)
 	defer cleanup()
 
-	hasher := NewPasswordHasher(65536, 3, 4)
+	hasher, err := NewPasswordHasher(65536, 3, 4)
+	assert.NoError(t, err)
 	repo := &mockRepo{
 		user: db.User{
 			ID:           pgtype.UUID{Bytes: uuid.New(), Valid: true},

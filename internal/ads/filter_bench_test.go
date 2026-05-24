@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 var (
@@ -214,8 +213,8 @@ func BenchmarkUnifiedFilter_Check(b *testing.B) {
 		time.Minute,
 		time.Hour,
 		time.Hour,
-		decimal.NewFromFloat(0.10),
-		decimal.NewFromFloat(0.01),
+		100_000,
+		10_000,
 		"events",
 		10000,
 	)
@@ -243,7 +242,7 @@ func BenchmarkRedisBudgetManager_CheckAndSpend(b *testing.B) {
 	customerID := uuid.New()
 	campaignID := uuid.New()
 	clickID := "click123"
-	amount := decimal.NewFromFloat(0.10)
+	amount := int64(100_000)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

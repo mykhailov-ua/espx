@@ -14,7 +14,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,7 +41,7 @@ func TestManagementAPI_Campaigns(t *testing.T) {
 
 	// Create test customer & campaign
 	custID := uuid.New()
-	err := svc.CreateCustomer(context.Background(), custID, "Advertiser", decimal.NewFromFloat(500.00), "USD")
+	err := svc.CreateCustomer(context.Background(), custID, "Advertiser", 500_000_000, "USD")
 	require.NoError(t, err)
 
 	campID, err := svc.CreateCampaign(
@@ -50,9 +49,9 @@ func TestManagementAPI_Campaigns(t *testing.T) {
 		custID,
 		nil,
 		"Spring Sale",
-		decimal.NewFromFloat(100.00),
+		100_000_000,
 		db.PacingModeTypeEVEN,
-		decimal.NewFromFloat(10.00),
+		10_000_000,
 		"UTC",
 		5,
 		3600,

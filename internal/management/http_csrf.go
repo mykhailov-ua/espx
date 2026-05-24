@@ -10,12 +10,12 @@ import (
 )
 
 // GenerateSecureToken generates unpredictable session secrets using hardware-backed cryptographic entropy. This prevents session guessing and token forgery attacks across distributed gateways.
-func GenerateSecureToken(length int) string {
+func GenerateSecureToken(length int) (string, error) {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
-		panic("cryptographic entropy source failure: " + err.Error())
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 // NewCSRFMiddleware implements the Double Submit Cookie pattern to guard against Cross-Site Request Forgery on state-mutating HTTP endpoints. Requiring both a non-HttpOnly cookie and a matching custom HTTP header verifies that requests originate strictly from authenticated client scripts.

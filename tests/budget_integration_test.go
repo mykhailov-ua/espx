@@ -9,7 +9,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,11 +37,11 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	customerID := uuid.New()
 	campaignID := uuid.New()
 
-	_, err := dbPool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Test Customer", 100.0)
+	_, err := dbPool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Test Customer", 100_000_000)
 	require.NoError(t, err)
 
 	_, err = dbPool.Exec(ctx, "INSERT INTO campaigns (id, name, budget_limit, status, customer_id) VALUES ($1, $2, $3, $4, $5)",
-		campaignID, "Test Campaign", 50.0, "ACTIVE", customerID)
+		campaignID, "Test Campaign", 50_000_000, "ACTIVE", customerID)
 	require.NoError(t, err)
 
 	_, err = registry.Sync(ctx)
@@ -51,7 +50,7 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	err = rdb.Set(ctx, "budget:campaign:"+campaignID.String(), 50_000_000, 0).Err()
 	require.NoError(t, err)
 
-	filter := ads.NewBudgetFilter(budgetManager, registry, decimal.NewFromFloat(0.10), decimal.NewFromFloat(0.01))
+	filter := ads.NewBudgetFilter(budgetManager, registry, 100_000, 10_000)
 	evt := &domain.Event{
 		ClickID:    uuid.NewString(),
 		CampaignID: campaignID,
@@ -76,10 +75,10 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	campaign, err := campaignRepo.GetByID(ctx, campaignID)
 	require.NoError(t, err, "failed to get campaign from DB")
 	require.NotNil(t, campaign)
-	assert.True(t, campaign.CurrentSpend.Equal(decimal.NewFromFloat(0.1)))
+	assert.Equal(t, int64(100_000), campaign.CurrentSpend)
 
 	customer, err := customerRepo.GetByID(ctx, customerID)
 	require.NoError(t, err, "failed to get customer from DB")
 	require.NotNil(t, customer)
-	assert.True(t, customer.Balance.Equal(decimal.NewFromFloat(99.9)))
+	assert.Equal(t, int64(99_900_000), customer.Balance)
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,14 +37,14 @@ func TestManagementService_CancelCampaign(t *testing.T) {
 
 	ctx := context.Background()
 	customerID := uuid.New()
-	err := svc.CreateCustomer(ctx, customerID, "Test Advertiser", decimal.NewFromInt(1000), "USD")
+	err := svc.CreateCustomer(ctx, customerID, "Test Advertiser", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
-	budget := decimal.NewFromInt(500)
-	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Test Campaign", budget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-1")
+	budget := int64(500_000_000)
+	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Test Campaign", budget, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "idemp-1")
 	require.NoError(t, err)
 
-	_, _ = pool.Exec(ctx, "UPDATE campaigns SET current_spend = $1 WHERE id = $2", ads.ToNumeric(decimal.NewFromInt(200)), campaignID)
+	_, _ = pool.Exec(ctx, "UPDATE campaigns SET current_spend = $1 WHERE id = $2", int64(200_000_000), campaignID)
 
 	err = svc.CancelCampaign(ctx, campaignID, "db.User request")
 	require.NoError(t, err)
@@ -53,7 +52,7 @@ func TestManagementService_CancelCampaign(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		var balance string
 		err := pool.QueryRow(ctx, "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&balance)
-		if err != nil || balance != "770.00" {
+		if err != nil || balance != "770000000" {
 			return false
 		}
 		var status string
@@ -76,9 +75,9 @@ func TestManagementService_Idempotency(t *testing.T) {
 	defer svc.Close()
 	ctx := context.Background()
 	customerID := uuid.New()
-	_ = svc.CreateCustomer(ctx, customerID, "Idem Tester", decimal.NewFromInt(1000), "USD")
+	_ = svc.CreateCustomer(ctx, customerID, "Idem Tester", 1_000_000_000, "USD")
 
-	amount := decimal.NewFromInt(100)
+	amount := int64(100_000_000)
 	hash := "topup-1"
 
 	err := svc.TopUpBalance(ctx, customerID, amount, hash)
@@ -89,5 +88,5 @@ func TestManagementService_Idempotency(t *testing.T) {
 
 	var balance string
 	_ = pool.QueryRow(ctx, "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&balance)
-	assert.Equal(t, "1100.00", balance)
+	assert.Equal(t, "1100000000", balance)
 }

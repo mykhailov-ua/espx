@@ -10,10 +10,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 // OutboxWorker implements a high-performance Hybrid CDC-like Transactional Outbox pattern.
@@ -30,7 +29,7 @@ func NewOutboxWorker(svc *Service) *OutboxWorker {
 
 type CampaignPayload struct {
 	CampaignID  string `json:"campaign_id"`
-	BudgetLimit string `json:"budget_limit,omitempty"`
+	BudgetLimit int64  `json:"budget_limit,omitempty"`
 }
 
 type SettingsPayload struct {
@@ -50,7 +49,7 @@ func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			default:
-			}
+				}
 
 			// Acquire a dedicated connection for LISTEN
 			conn, err := w.svc.pool.Acquire(ctx)
@@ -162,11 +161,7 @@ func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
 				rdb := w.svc.getRDB(campUUID)
 				if rdb != nil {
 					_, rdbErr = rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-						budgetVal := int64(0)
-						if dec, err := decimal.NewFromString(p.BudgetLimit); err == nil {
-							budgetVal = ads.DecimalToMicro(dec)
-						}
-						pipe.Set(ctx, fmt.Sprintf("budget:campaign:%s", p.CampaignID), budgetVal, 24*time.Hour)
+						pipe.Set(ctx, fmt.Sprintf("budget:campaign:%s", p.CampaignID), p.BudgetLimit, 24*time.Hour)
 						channel := w.svc.cfg.CampaignUpdateChannel
 						if channel == "" {
 							channel = "campaigns:update"
@@ -238,7 +233,7 @@ func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
 			if err := json.Unmarshal(ev.Payload, &p); err == nil {
 				brandUUID, parseErr := uuid.Parse(p.BrandID)
 				if parseErr == nil {
-					rows, dbErr := w.svc.pool.Query(ctx, "SELECT id FROM campaigns WHERE brand_id = $1 AND status = 'ACTIVE'", ads.ToUUID(brandUUID))
+					rows, dbErr := w.svc.pool.Query(ctx, "SELECT id FROM campaigns WHERE brand_id = $1 AND status = 'ACTIVE'", ToUUID(brandUUID))
 					if dbErr == nil {
 						var campIDs []string
 						for rows.Next() {
@@ -300,4 +295,8 @@ func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func ToUUID(u uuid.UUID) pgtype.UUID {
+	return pgtype.UUID{Bytes: u, Valid: true}
 }

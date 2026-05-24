@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -57,8 +56,8 @@ func TestUnifiedFilter_GeoBidFloor(t *testing.T) {
 		time.Minute,
 		time.Hour,
 		time.Hour,
-		decimal.NewFromFloat(0.10),
-		decimal.NewFromFloat(0.01),
+		100_000,
+		10_000,
 		"events-stream",
 		10000,
 	)

@@ -125,7 +125,7 @@ func seedEvents(t *testing.T, queries *db.Queries, count int) {
 	for i := 0; i < count; i++ {
 		payload := CampaignPayload{
 			CampaignID:  uuid.New().String(),
-			BudgetLimit: "100.50",
+			BudgetLimit: 100_500_000,
 		}
 		payloadBytes, err := json.Marshal(payload)
 		require.NoError(t, err)

@@ -17,7 +17,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,10 +50,10 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	require.NoError(t, pm.Run(ctx))
 
 	customerID := uuid.New()
-	_, _ = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Shutdown Customer", 1000.00)
+	_, _ = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Shutdown Customer", 1_000_000_000)
 
 	campaignID := uuid.New()
-	_, err := pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Shutdown Test", "ACTIVE", customerID, 1000.00)
+	_, err := pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Shutdown Test", "ACTIVE", customerID, 1_000_000_000)
 	require.NoError(t, err)
 
 	registry := ads.NewRegistry(queries)
@@ -70,8 +69,8 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 		time.Minute,
 		45*time.Second,
 		24*time.Hour,
-		decimal.NewFromFloat(0.1),
-		decimal.NewFromFloat(0.01),
+		100_000,
+		10_000,
 		"shutdown-stream",
 		100000,
 	)

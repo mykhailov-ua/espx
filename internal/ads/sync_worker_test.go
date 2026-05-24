@@ -1,7 +1,5 @@
 package ads
 
-import ()
-
 import (
 	"context"
 	"testing"
@@ -10,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -32,7 +29,7 @@ func (m *mockCampaignRepo) UpdateStatus(ctx context.Context, id uuid.UUID, statu
 	return args.Error(0)
 }
 
-func (m *mockCampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount decimal.Decimal, txID string) error {
+func (m *mockCampaignRepo) UpdateSpend(ctx context.Context, id uuid.UUID, amount int64, txID string) error {
 	args := m.Called(ctx, id, amount, txID)
 	return args.Error(0)
 }
@@ -70,8 +67,8 @@ func TestMultiShardBudgetSync(t *testing.T) {
 	repo := new(mockCampaignRepo)
 
 	// Configures expectations for atomic database updates per shard.
-	repo.On("UpdateSpend", mock.Anything, campaignID, decimal.NewFromFloat(10.5).Round(6), mock.Anything).Return(nil).Once()
-	repo.On("UpdateSpend", mock.Anything, campaignID, decimal.NewFromFloat(5.25).Round(6), mock.Anything).Return(nil).Once()
+	repo.On("UpdateSpend", mock.Anything, campaignID, int64(10500000), mock.Anything).Return(nil).Once()
+	repo.On("UpdateSpend", mock.Anything, campaignID, int64(5250000), mock.Anything).Return(nil).Once()
 
 	worker1 := NewSyncWorker(rdb1, repo, nil, 100*time.Millisecond)
 	worker2 := NewSyncWorker(rdb2, repo, nil, 100*time.Millisecond)

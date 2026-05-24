@@ -51,7 +51,7 @@ type PasswordHasher struct {
 	dummyHash   string
 }
 
-func NewPasswordHasher(memory, iterations uint32, parallelism uint8) *PasswordHasher {
+func NewPasswordHasher(memory, iterations uint32, parallelism uint8) (*PasswordHasher, error) {
 	h := &PasswordHasher{
 		memory:      memory,
 		iterations:  iterations,
@@ -62,9 +62,9 @@ func NewPasswordHasher(memory, iterations uint32, parallelism uint8) *PasswordHa
 	var err error
 	h.dummyHash, err = h.HashPassword("dummy-password-timing-attack")
 	if err != nil {
-		panic(fmt.Sprintf("failed to pre-compute dummy hash: %v", err))
+		return nil, fmt.Errorf("failed to pre-compute dummy hash: %w", err)
 	}
-	return h
+	return h, nil
 }
 
 func (h *PasswordHasher) GetDummyHash() string {

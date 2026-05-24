@@ -13,7 +13,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,19 +31,19 @@ func TestEdge_RoundingAndSmallAmounts(t *testing.T) {
 
 
 	customerID := uuid.New()
-	_ = svc.CreateCustomer(context.Background(), customerID, "Small Saver", decimal.NewFromFloat(100.0), "USD")
+	_ = svc.CreateCustomer(context.Background(), customerID, "Small Saver", 100_000_000, "USD")
 
-	budget := decimal.NewFromFloat(1.05)
-	id, err := svc.CreateCampaign(context.Background(), customerID, nil, "Tiny Camp", budget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-1")
+	budget := int64(1_050_000)
+	id, err := svc.CreateCampaign(context.Background(), customerID, nil, "Tiny Camp", budget, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "idemp-1")
 	require.NoError(t, err)
 
 	err = svc.CancelCampaign(context.Background(), id, "Too small")
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
-		var finalBalance string
-		_ = pool.QueryRow(context.Background(), "SELECT balance::TEXT FROM customers WHERE id = $1", customerID).Scan(&finalBalance)
-		return finalBalance == "99.89"
+		var finalBalance int64
+		_ = pool.QueryRow(context.Background(), "SELECT balance FROM customers WHERE id = $1", customerID).Scan(&finalBalance)
+		return finalBalance == 99895000
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
@@ -58,10 +57,10 @@ func TestEdge_ConcurrentBalanceDepletion(t *testing.T) {
 	defer svc.Close()
 
 	customerID := uuid.New()
-	_ = svc.CreateCustomer(context.Background(), customerID, "Poor db.User", decimal.NewFromFloat(500.0), "USD")
+	_ = svc.CreateCustomer(context.Background(), customerID, "Poor db.User", 500_000_000, "USD")
 
 	const workers = 10
-	campaignBudget := decimal.NewFromFloat(100.0)
+	campaignBudget := int64(100_000_000)
 
 	var wg sync.WaitGroup
 	wg.Add(workers)
@@ -70,7 +69,7 @@ func TestEdge_ConcurrentBalanceDepletion(t *testing.T) {
 	for i := 0; i < workers; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			_, err := svc.CreateCampaign(context.Background(), customerID, nil, fmt.Sprintf("Camp-%d", idx), campaignBudget, db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, fmt.Sprintf("idemp-%d", idx))
+			_, err := svc.CreateCampaign(context.Background(), customerID, nil, fmt.Sprintf("Camp-%d", idx), campaignBudget, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, fmt.Sprintf("idemp-%d", idx))
 			results <- err
 		}(i)
 	}
@@ -104,8 +103,8 @@ func TestEdge_ResumingStuckSettlement(t *testing.T) {
 	defer svc.Close()
 
 	customerID := uuid.New()
-	_ = svc.CreateCustomer(context.Background(), customerID, "Crash Test", decimal.NewFromFloat(1000.0), "USD")
-	campaignID, _ := svc.CreateCampaign(context.Background(), customerID, nil, "Zombie", decimal.NewFromFloat(500.0), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "idemp-crash")
+	_ = svc.CreateCustomer(context.Background(), customerID, "Crash Test", 1_000_000_000, "USD")
+	campaignID, _ := svc.CreateCampaign(context.Background(), customerID, nil, "Zombie", 500_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "idemp-crash")
 
 	_, _ = pool.Exec(context.Background(), "UPDATE campaigns SET status = 'DRAINING' WHERE id = $1", campaignID)
 

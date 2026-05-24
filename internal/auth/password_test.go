@@ -8,7 +8,10 @@ import (
 func TestHashAndVerify(t *testing.T) {
 	password := "super_secret_password_123!"
 
-	hasher := NewPasswordHasher(65536, 3, 4)
+	hasher, err := NewPasswordHasher(65536, 3, 4)
+	if err != nil {
+		t.Fatalf("NewPasswordHasher failed: %v", err)
+	}
 	hash, err := hasher.HashPassword(password)
 	if err != nil {
 		t.Fatalf("HashPassword failed: %v", err)
@@ -70,7 +73,10 @@ func BenchmarkHashPassword(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	hasher := NewPasswordHasher(65536, 3, 4)
+	hasher, err := NewPasswordHasher(65536, 3, 4)
+	if err != nil {
+		b.Fatalf("NewPasswordHasher failed: %v", err)
+	}
 	for i := 0; i < b.N; i++ {
 		_, _ = hasher.HashPassword(password)
 	}
@@ -78,7 +84,10 @@ func BenchmarkHashPassword(b *testing.B) {
 
 func BenchmarkVerifyPassword(b *testing.B) {
 	password := "benchmark_password"
-	hasher := NewPasswordHasher(65536, 3, 4)
+	hasher, err := NewPasswordHasher(65536, 3, 4)
+	if err != nil {
+		b.Fatalf("NewPasswordHasher failed: %v", err)
+	}
 	hash, _ := hasher.HashPassword(password)
 
 	b.ResetTimer()

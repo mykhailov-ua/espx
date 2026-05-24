@@ -16,7 +16,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,7 +45,7 @@ func TestBrandFrequencyCapping(t *testing.T) {
 
 	ctx := context.Background()
 	custID := uuid.New()
-	err := svc.CreateCustomer(ctx, custID, "Brand Owner", decimal.NewFromFloat(1000.00), "USD")
+	err := svc.CreateCustomer(ctx, custID, "Brand Owner", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
 	// 1. Create a brand group via REST API
@@ -196,8 +195,8 @@ func TestBrandFrequencyCapping(t *testing.T) {
 		time.Minute,
 		time.Hour,
 		time.Hour,
-		decimal.NewFromFloat(0.10),
-		decimal.NewFromFloat(0.01),
+		100_000,
+		10_000,
 		"events-stream",
 		10000,
 	)

@@ -16,7 +16,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,11 +52,11 @@ func TestE2EFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	customerID := uuid.New()
-	_, err = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Test Customer", 1000.00)
+	_, err = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Test Customer", 1_000_000_000)
 	require.NoError(t, err)
 
 	campaignID := uuid.New()
-	_, err = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "E2E Campaign", "ACTIVE", customerID, 100.00)
+	_, err = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "E2E Campaign", "ACTIVE", customerID, 100_000_000)
 	require.NoError(t, err)
 
 	registry := ads.NewRegistry(queries)
@@ -74,8 +73,8 @@ func TestE2EFlow(t *testing.T) {
 		time.Minute,
 		45*time.Second,
 		24*time.Hour,
-		decimal.NewFromFloat(0.1),
-		decimal.NewFromFloat(0.01),
+		100_000,
+		10_000,
 		"test-stream",
 		100000,
 	)
@@ -140,10 +139,10 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 	}
 
 	customerID := uuid.New()
-	_, _ = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Proto Customer", 1000.00)
+	_, _ = pool.Exec(ctx, "INSERT INTO customers (id, name, balance) VALUES ($1, $2, $3)", customerID, "Proto Customer", 1_000_000_000)
 
 	campaignID := uuid.New()
-	_, _ = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Proto Campaign", "ACTIVE", customerID, 100.00)
+	_, _ = pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Proto Campaign", "ACTIVE", customerID, 100_000_000)
 
 	registry := ads.NewRegistry(queries)
 	_, _ = registry.Sync(ctx)
@@ -159,8 +158,8 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 		time.Minute,
 		45*time.Second,
 		24*time.Hour,
-		decimal.NewFromFloat(0.1),
-		decimal.NewFromFloat(0.01),
+		100_000,
+		10_000,
 		"test-proto-stream",
 		100000,
 	)

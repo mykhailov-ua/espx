@@ -11,7 +11,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	redis "github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,11 +37,11 @@ func TestClosedLoopPacingController(t *testing.T) {
 	ctx := context.Background()
 	customerID := uuid.New()
 
-	err := svc.CreateCustomer(ctx, customerID, "Pacing Customer", decimal.NewFromInt(1000), "USD")
+	err := svc.CreateCustomer(ctx, customerID, "Pacing Customer", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
 	// Create campaign in EVEN pacing mode
-	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Test", decimal.NewFromInt(100), db.PacingModeTypeEVEN, decimal.NewFromInt(100), "UTC", 0, 0, nil, "pacing-idem")
+	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Test", 100_000_000, db.PacingModeTypeEVEN, 100_000_000, "UTC", 0, 0, nil, "pacing-idem")
 	require.NoError(t, err)
 
 	// Clear outbox events prior to evaluation
@@ -61,7 +60,7 @@ func TestClosedLoopPacingController(t *testing.T) {
 	// But let's check: we can cheat the expected spend in the test by updating current_spend to a tiny value (e.g. 0.05).
 	// Because expected spend will be at least a positive value (since time ratios are calculated using time.Now()),
 	// a current_spend of 0.00 or 0.05 will always be under the underThreshold!
-	_, err = pool.Exec(ctx, "UPDATE campaigns SET current_spend = 0.05, pacing_mode = 'EVEN' WHERE id = $1", ads.ToUUID(campaignID))
+	_, err = pool.Exec(ctx, "UPDATE campaigns SET current_spend = 50000, pacing_mode = 'EVEN' WHERE id = $1", ads.ToUUID(campaignID))
 	require.NoError(t, err)
 
 	// Run pacing controller
@@ -84,7 +83,7 @@ func TestClosedLoopPacingController(t *testing.T) {
 	// Set current spend to a huge value (e.g. 150.00), pacing mode back to ASAP
 	_, err = pool.Exec(ctx, "DELETE FROM outbox_events")
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, "UPDATE campaigns SET current_spend = 150.00, pacing_mode = 'ASAP' WHERE id = $1", ads.ToUUID(campaignID))
+	_, err = pool.Exec(ctx, "UPDATE campaigns SET current_spend = 150000000, pacing_mode = 'ASAP' WHERE id = $1", ads.ToUUID(campaignID))
 	require.NoError(t, err)
 
 	// Run pacing controller
@@ -124,15 +123,15 @@ func TestClosedLoopPacingController_EdgeCases(t *testing.T) {
 	ctx := context.Background()
 	customerID := uuid.New()
 
-	err := svc.CreateCustomer(ctx, customerID, "Pacing Customer Edge", decimal.NewFromInt(1000), "USD")
+	err := svc.CreateCustomer(ctx, customerID, "Pacing Customer Edge", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
 	// Campaign 1: Invalid timezone
-	campaignID1, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Timezone Edge", decimal.NewFromInt(100), db.PacingModeTypeEVEN, decimal.NewFromInt(100), "Invalid/Zone", 0, 0, nil, "pacing-idem-1")
+	campaignID1, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Timezone Edge", 100_000_000, db.PacingModeTypeEVEN, 100_000_000, "Invalid/Zone", 0, 0, nil, "pacing-idem-1")
 	require.NoError(t, err)
 
 	// Campaign 2: Zero budget
-	campaignID2, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Zero Budget Edge", decimal.Zero, db.PacingModeTypeEVEN, decimal.Zero, "UTC", 0, 0, nil, "pacing-idem-2")
+	campaignID2, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Zero Budget Edge", 0, db.PacingModeTypeEVEN, 0, "UTC", 0, 0, nil, "pacing-idem-2")
 	require.NoError(t, err)
 
 	// Clear outbox
@@ -140,7 +139,7 @@ func TestClosedLoopPacingController_EdgeCases(t *testing.T) {
 	require.NoError(t, err)
 
 	// Force spending on Campaign 1 (invalid timezone -> should fall back to UTC and pacing should execute)
-	_, err = pool.Exec(ctx, "UPDATE campaigns SET current_spend = 0.05, pacing_mode = 'EVEN' WHERE id = $1", ads.ToUUID(campaignID1))
+	_, err = pool.Exec(ctx, "UPDATE campaigns SET current_spend = 50000, pacing_mode = 'EVEN' WHERE id = $1", ads.ToUUID(campaignID1))
 	require.NoError(t, err)
 
 	// Setup mock sync worker
@@ -188,14 +187,14 @@ func BenchmarkClosedLoopPacingController(b *testing.B) {
 	ctx := context.Background()
 	customerID := uuid.New()
 
-	err := svc.CreateCustomer(ctx, customerID, "Bench Pacing Customer", decimal.NewFromInt(1000), "USD")
+	err := svc.CreateCustomer(ctx, customerID, "Bench Pacing Customer", 1_000_000_000, "USD")
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	// Create 10 active campaigns that do not require adjustments
 	for i := 0; i < 10; i++ {
-		_, err := svc.CreateCampaign(ctx, customerID, nil, uuid.New().String(), decimal.NewFromInt(100), db.PacingModeTypeEVEN, decimal.NewFromInt(100), "UTC", 0, 0, nil, uuid.New().String())
+		_, err := svc.CreateCampaign(ctx, customerID, nil, uuid.New().String(), 100_000_000, db.PacingModeTypeEVEN, 100_000_000, "UTC", 0, 0, nil, uuid.New().String())
 		if err != nil {
 			b.Fatal(err)
 		}

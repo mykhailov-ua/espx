@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 var (
@@ -198,11 +197,11 @@ func (f *GeoFilter) Check(ctx context.Context, evt *domain.Event) error {
 type BudgetFilter struct {
 	manager          domain.BudgetManager
 	registry         domain.CampaignRegistry
-	clickAmount      decimal.Decimal
-	impressionAmount decimal.Decimal
+	clickAmount      int64
+	impressionAmount int64
 }
 
-func NewBudgetFilter(manager domain.BudgetManager, registry domain.CampaignRegistry, clickAmount, impressionAmount decimal.Decimal) *BudgetFilter {
+func NewBudgetFilter(manager domain.BudgetManager, registry domain.CampaignRegistry, clickAmount, impressionAmount int64) *BudgetFilter {
 	return &BudgetFilter{
 		manager:          manager,
 		registry:         registry,

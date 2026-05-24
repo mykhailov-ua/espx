@@ -1,10 +1,6 @@
 package ads
 
 import (
-// "github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-)
-
-import (
 	"context"
 	"log/slog"
 	"strconv"
@@ -13,17 +9,16 @@ import (
 
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 )
 
 // DynamicConfig represents settings that can be updated at runtime via the Management API.
 type DynamicConfig struct {
-	Version          int64           `json:"version"`
-	RateLimitPerMin  int             `json:"rate_limit_per_min"`
-	RateLimitWindow  int             `json:"rate_limit_window_ms"`
-	ClickAmount      decimal.Decimal `json:"click_amount"`
-	ImpressionAmount decimal.Decimal `json:"impression_amount"`
-	EmergencyBreaker bool            `json:"emergency_breaker"`
+	Version          int64  `json:"version"`
+	RateLimitPerMin  int    `json:"rate_limit_per_min"`
+	RateLimitWindow  int    `json:"rate_limit_window_ms"`
+	ClickAmount      int64  `json:"click_amount"`
+	ImpressionAmount int64  `json:"impression_amount"`
+	EmergencyBreaker bool   `json:"emergency_breaker"`
 }
 
 // SettingsWatcher periodically checks Redis for configuration updates and performs atomic swaps of the local state.
@@ -104,8 +99,8 @@ func (sw *SettingsWatcher) parseConfig(version int64, data map[string]string) *D
 
 	updateInt(&next.RateLimitPerMin, data["rate_limit_per_min"])
 	updateInt(&next.RateLimitWindow, data["rate_limit_window_ms"])
-	updateDecimal(&next.ClickAmount, data["click_amount"])
-	updateDecimal(&next.ImpressionAmount, data["impression_amount"])
+	updateMicro(&next.ClickAmount, data["click_amount"])
+	updateMicro(&next.ImpressionAmount, data["impression_amount"])
 	updateBool(&next.EmergencyBreaker, data["emergency_breaker"])
 
 	return &next
@@ -120,12 +115,12 @@ func updateInt(target *int, val string) {
 	}
 }
 
-func updateDecimal(target *decimal.Decimal, val string) {
+func updateMicro(target *int64, val string) {
 	if val == "" {
 		return
 	}
-	if d, err := decimal.NewFromString(val); err == nil {
-		*target = d
+	if f, err := strconv.ParseFloat(val, 64); err == nil {
+		*target = int64(f * 1_000_000)
 	}
 }
 

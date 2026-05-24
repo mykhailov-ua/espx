@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCSRFMiddleware(t *testing.T) {
@@ -18,7 +19,8 @@ func TestCSRFMiddleware(t *testing.T) {
 
 	handler := mdl(dummyHandler)
 
-	token := GenerateSecureToken(32)
+	token, err := GenerateSecureToken(32)
+	require.NoError(t, err)
 
 	t.Run("GET_Request_Allowed", func(t *testing.T) {
 		req, _ := http.NewRequest("GET", "/admin/customers", nil)

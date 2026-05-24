@@ -108,7 +108,12 @@ func (h *AuthHandler) login(w http.ResponseWriter, r *http.Request) {
 
 	setCookie(w, "accessToken", resp.AccessToken, "/", 3600, true)
 	setCookie(w, "refreshToken", resp.RefreshToken, "/api/v1/auth", 30*24*3600, true)
-	csrf := GenerateSecureToken(32)
+	csrf, err := GenerateSecureToken(32)
+	if err != nil {
+		slog.Error("failed to generate secure csrf token due to entropy starvation", "error", err)
+		httpresponse.Error(w, http.StatusInternalServerError, "INTERNAL_SERVER_ERROR", "internal system failure")
+		return
+	}
 	setCookie(w, "csrfToken", csrf, "/", 3600, false)
 	w.Header().Set("X-CSRF-Token", csrf)
 

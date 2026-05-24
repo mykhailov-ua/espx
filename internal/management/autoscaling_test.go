@@ -11,7 +11,6 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
-	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,15 +41,15 @@ func TestSmartBudgetAutoscaling(t *testing.T) {
 	customerID := uuid.New()
 
 	// 1. Create customer with sufficient initial balance.
-	err := svc.CreateCustomer(ctx, customerID, "Smart Customer", decimal.NewFromInt(1000), "USD")
+	err := svc.CreateCustomer(ctx, customerID, "Smart Customer", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
 	// 2. Create low-performer campaign (A).
-	campaignA, err := svc.CreateCampaign(ctx, customerID, nil, "Low CTR Campaign", decimal.NewFromInt(100), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "low-idem")
+	campaignA, err := svc.CreateCampaign(ctx, customerID, nil, "Low CTR Campaign", 100_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "low-idem")
 	require.NoError(t, err)
 
 	// 3. Create high-performer campaign (B).
-	campaignB, err := svc.CreateCampaign(ctx, customerID, nil, "High CTR Campaign", decimal.NewFromInt(100), db.PacingModeTypeASAP, decimal.Zero, "UTC", 0, 0, nil, "high-idem")
+	campaignB, err := svc.CreateCampaign(ctx, customerID, nil, "High CTR Campaign", 100_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "high-idem")
 	require.NoError(t, err)
 
 	// 4. Populate performance statistics to establish CTR differences:
@@ -100,19 +99,19 @@ func TestSmartBudgetAutoscaling(t *testing.T) {
 	var spendA string
 	err = pool.QueryRow(ctx, "SELECT current_spend::TEXT FROM campaigns WHERE id = $1", ads.ToUUID(campaignA)).Scan(&spendA)
 	require.NoError(t, err)
-	assert.Equal(t, "5.00", spendA)
+	assert.Equal(t, "5000000", spendA)
 
 	// Budget limit check: Campaign A limit should decrease to $90.00 ($100 - $10).
 	var limitA string
 	err = pool.QueryRow(ctx, "SELECT budget_limit::TEXT FROM campaigns WHERE id = $1", ads.ToUUID(campaignA)).Scan(&limitA)
 	require.NoError(t, err)
-	assert.Equal(t, "90.00", limitA)
+	assert.Equal(t, "90000000", limitA)
 
 	// Budget limit check: Campaign B limit should increase to $110.00 ($100 + $10).
 	var limitB string
 	err = pool.QueryRow(ctx, "SELECT budget_limit::TEXT FROM campaigns WHERE id = $1", ads.ToUUID(campaignB)).Scan(&limitB)
 	require.NoError(t, err)
-	assert.Equal(t, "110.00", limitB)
+	assert.Equal(t, "110000000", limitB)
 
 	// 9. Verify outbox events: two CREATE_CAMPAIGN events must be generated to update Redis caches.
 	var outboxCount int
