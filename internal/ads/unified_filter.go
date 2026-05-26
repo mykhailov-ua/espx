@@ -5,7 +5,9 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -93,6 +95,10 @@ func init() {
 	}
 }
 
+type DBHealthChecker interface {
+	Ping(ctx context.Context) error
+}
+
 type UnifiedFilter struct {
 	rdbs                     []redis.UniversalClient
 	sharder                  Sharder
@@ -116,6 +122,22 @@ type UnifiedFilter struct {
 	maxStreamLenAny          any
 	clickAmountMicroAny      any
 	impressionAmountMicroAny any
+
+	// SLA & Latency Sentinel
+	dbHealth               DBHealthChecker
+	slaPenaltyActive       atomic.Bool
+	p95ThresholdMs         float64
+	recoveryEmaMs          float64
+	recoveryStableDuration time.Duration
+	emaAlpha               float64
+	latencySamples         []float64
+	latencyIdx             int
+	latencyMu              sync.Mutex
+	recoveryStartTime      time.Time
+	currentEma             float64
+
+	clickAmountMicroHalfAny      any
+	impressionAmountMicroHalfAny any
 }
 
 // SetGeoProvider configures the GeoIP resolution service.
@@ -190,27 +212,133 @@ func NewUnifiedFilter(
 	maxStreamLen int,
 ) *UnifiedFilter {
 	return &UnifiedFilter{
-		rdbs:                     rdbs,
-		sharder:                  sharder,
-		script:                   redis.NewScript(unifiedFilterLua),
-		registry:                 registry,
-		repo:                     repo,
-		rateLimit:                rateLimit,
-		rateLimitWindow:          rateLimitWindow,
-		dupTTL:                   dupTTL,
-		idempotencyTTL:           idempotencyTTL,
-		clickAmountMicro:         clickAmount,
-		impressionAmountMicro:    impressionAmount,
-		streamName:               streamName,
-		maxStreamLen:             maxStreamLen,
-		rateLimitWindowAny:       int(rateLimitWindow.Seconds()),
-		rateLimitAny:             rateLimit,
-		dupTTLAny:                int(dupTTL.Seconds()),
-		idempotencyTTLAny:        int(idempotencyTTL.Seconds()),
-		maxStreamLenAny:          maxStreamLen,
-		clickAmountMicroAny:      clickAmount,
-		impressionAmountMicroAny: impressionAmount,
+		rdbs:                         rdbs,
+		sharder:                      sharder,
+		script:                       redis.NewScript(unifiedFilterLua),
+		registry:                     registry,
+		repo:                         repo,
+		rateLimit:                    rateLimit,
+		rateLimitWindow:              rateLimitWindow,
+		dupTTL:                       dupTTL,
+		idempotencyTTL:               idempotencyTTL,
+		clickAmountMicro:             clickAmount,
+		impressionAmountMicro:        impressionAmount,
+		streamName:                   streamName,
+		maxStreamLen:                 maxStreamLen,
+		rateLimitWindowAny:           int(rateLimitWindow.Seconds()),
+		rateLimitAny:                 rateLimit,
+		dupTTLAny:                    int(dupTTL.Seconds()),
+		idempotencyTTLAny:            int(idempotencyTTL.Seconds()),
+		maxStreamLenAny:              maxStreamLen,
+		clickAmountMicroAny:          clickAmount,
+		impressionAmountMicroAny:     impressionAmount,
+		clickAmountMicroHalfAny:      clickAmount / 2,
+		impressionAmountMicroHalfAny: impressionAmount / 2,
 	}
+}
+
+// SetSLATargets configures the latency thresholds for the SLA sentinel.
+func (f *UnifiedFilter) SetSLATargets(p95, recovery float64, stable time.Duration, alpha float64) {
+	f.p95ThresholdMs = p95
+	f.recoveryEmaMs = recovery
+	f.recoveryStableDuration = stable
+	f.emaAlpha = alpha
+}
+
+// ResizeTrackers initializes the latency sample buffer.
+func (f *UnifiedFilter) ResizeTrackers(size int) {
+	f.latencyMu.Lock()
+	defer f.latencyMu.Unlock()
+	f.latencySamples = make([]float64, size)
+	f.latencyIdx = 0
+}
+
+// SetDBHealthChecker registers the database health provider.
+func (f *UnifiedFilter) SetDBHealthChecker(checker DBHealthChecker) {
+	f.dbHealth = checker
+}
+
+// StartSLASentinel launches a background goroutine to monitor DB latency and enforce SLA penalties.
+func (f *UnifiedFilter) StartSLASentinel(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if f.dbHealth == nil {
+					continue
+				}
+
+				start := time.Now()
+				err := f.dbHealth.Ping(ctx)
+				latency := float64(time.Since(start).Milliseconds())
+				if err != nil {
+					// If ping fails, we treat it as a massive latency spike to trigger SLA penalty
+					latency = f.p95ThresholdMs + 1000
+				}
+
+				f.latencyMu.Lock()
+				if len(f.latencySamples) > 0 {
+					f.latencySamples[f.latencyIdx%len(f.latencySamples)] = latency
+					f.latencyIdx++
+				}
+
+				// Update EMA for recovery detection
+				if f.currentEma == 0 {
+					f.currentEma = latency
+				} else {
+					f.currentEma = f.emaAlpha*latency + (1-f.emaAlpha)*f.currentEma
+				}
+
+				// Calculate P95
+				var p95 float64
+				if len(f.latencySamples) > 0 {
+					samples := make([]float64, len(f.latencySamples))
+					copy(samples, f.latencySamples)
+					sort.Float64s(samples)
+					idx := int(float64(len(samples)) * 0.95)
+					if idx >= len(samples) {
+						idx = len(samples) - 1
+					}
+					p95 = samples[idx]
+				}
+
+				isActive := f.slaPenaltyActive.Load()
+
+				if !isActive && p95 > f.p95ThresholdMs {
+					// Breach detected
+					f.slaPenaltyActive.Store(true)
+					for _, rdb := range f.rdbs {
+						_ = rdb.Set(ctx, "sla:penalty:active", true, 0).Err()
+					}
+				} else if isActive {
+					// Check for recovery: EMA below threshold and stable for duration
+					if f.currentEma < f.recoveryEmaMs {
+						if f.recoveryStartTime.IsZero() {
+							f.recoveryStartTime = time.Now()
+						} else if time.Since(f.recoveryStartTime) >= f.recoveryStableDuration {
+							f.slaPenaltyActive.Store(false)
+							f.recoveryStartTime = time.Time{}
+							for _, rdb := range f.rdbs {
+								_ = rdb.Del(ctx, "sla:penalty:active").Err()
+							}
+						}
+					} else {
+						f.recoveryStartTime = time.Time{}
+					}
+				}
+				f.latencyMu.Unlock()
+
+				if err != nil {
+					// Optional: log or handle ping error
+				}
+			}
+		}
+	}()
 }
 
 func (f *UnifiedFilter) getRDB(campaignID uuid.UUID) redis.UniversalClient {
@@ -258,6 +386,14 @@ func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	amount := f.clickAmountMicroAny
 	if evt.Type == "impression" {
 		amount = f.impressionAmountMicroAny
+	}
+
+	if f.slaPenaltyActive.Load() {
+		if evt.Type == "impression" {
+			amount = f.impressionAmountMicroHalfAny
+		} else {
+			amount = f.clickAmountMicroHalfAny
+		}
 	}
 
 	rdb := f.getRDB(evt.CampaignID)
