@@ -77,4 +77,59 @@ var (
 		Name: "ad_reconciliation_drift_ratio",
 		Help: "Ratio of discrepancy between Postgres and ClickHouse spend",
 	}, []string{"campaign_id"})
+
+	// gnet & Network Metrics
+	GnetPacketsReceived = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_gnet_packets_received_total",
+		Help: "Total number of network packets received",
+	})
+	GnetPacketsSent = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_gnet_packets_sent_total",
+		Help: "Total number of network packets sent",
+	})
+	GnetActiveConnections = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "ad_gnet_active_connections",
+		Help: "Current number of active TCP connections",
+	})
+	GnetEventLoopWorkDuration = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_gnet_event_loop_work_duration_seconds_total",
+		Help: "Total execution time spent doing active processing in gnet event loops",
+	})
+	GnetBytesReceived = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_gnet_bytes_received_total",
+		Help: "Total number of bytes received via gnet",
+	})
+	GnetBytesSent = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_gnet_bytes_sent_total",
+		Help: "Total number of bytes sent via gnet",
+	})
+	HttpParseErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ad_http_parse_errors_total",
+		Help: "Total number of HTTP/1.1 parsing errors",
+	}, []string{"error_type"})
+
+	// Business Logic / Filter Metrics
+	FilterThroughput = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ad_filter_throughput_total",
+		Help: "Total throughput through the filter engine",
+	}, []string{"format"})
+	FilterDecisions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ad_filter_decisions_total",
+		Help: "Filter decisions made by the engine",
+	}, []string{"decision"})
+	RedisLuaDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "ad_redis_lua_duration_seconds",
+		Help:    "Execution duration of Redis Lua filters",
+		Buckets: []float64{0.0005, 0.001, 0.002, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5},
+	}, []string{"shard"})
+	RegistrySyncLag = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "ad_registry_sync_lag_seconds",
+		Help:    "Registry sync lag between database update and cache loading",
+		Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+	})
+	UuidGenDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "ad_uuid_generation_duration_nanoseconds",
+		Help:    "Execution duration of NewFastUUID in nanoseconds",
+		Buckets: []float64{10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
+	})
 )
