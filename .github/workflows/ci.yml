@@ -54,23 +54,29 @@ jobs:
           echo "Running PR benchmarks..."
           go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > pr_bench.txt
 
+          BASELINE_REF="origin/main"
           if [ "$ACT" = "true" ]; then
-            echo "Running in local ACT environment, skipping fetch and using local main..."
-            git checkout main -- internal/ads api/proto/events.proto
+            BASELINE_REF="main"
           else
-            echo "Fetching baseline from main..."
             git fetch origin main
-            git checkout origin/main -- internal/ads api/proto/events.proto
           fi
 
-          # Remove vtproto file if it doesn't exist on main to prevent compilation mismatch
-          rm -f internal/ads/pb/events_vtproto.pb.go
-
-          echo "Running baseline benchmarks..."
-          go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > baseline_bench.txt
-
-          # Restore PR files for compilation and validation
-          git checkout HEAD -- internal/ads api/proto/events.proto
+          BASELINE_SHA=$(git rev-parse "$BASELINE_REF")
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ "$BASELINE_SHA" = "$HEAD_SHA" ]; then
+            echo "Baseline equals HEAD (direct push to main), copying PR results as baseline."
+            cp pr_bench.txt baseline_bench.txt
+          else
+            cp -r internal/ads/pb internal/ads/pb.pr_backup
+            git checkout "$BASELINE_REF" -- internal/ads api/proto/events.proto
+            if [ ! -f internal/ads/pb/events_vtproto.pb.go ] && [ -f internal/ads/pb.pr_backup/events_vtproto.pb.go ]; then
+              cp internal/ads/pb.pr_backup/events_vtproto.pb.go internal/ads/pb/events_vtproto.pb.go
+            fi
+            echo "Running baseline benchmarks..."
+            go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > baseline_bench.txt
+            git checkout HEAD -- internal/ads api/proto/events.proto
+            rm -rf internal/ads/pb.pr_backup
+          fi
 
           echo "Executing performance gate..."
           go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt > gate_report.txt
