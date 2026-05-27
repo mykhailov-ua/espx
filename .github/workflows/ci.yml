@@ -25,3 +25,63 @@ jobs:
 
       - name: Build Docker
         run: make build
+
+  performance-gate:
+    name: Performance Gate
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Force CPU Performance Governor
+        run: |
+          if [ -d /sys/devices/system/cpu/cpu0/cpufreq ]; then
+            echo "Forcing CPU governor to performance"
+            echo "performance" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor || true
+          else
+            echo "No cpufreq scaling support found. Skipping."
+          fi
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Run Benchmark Analysis
+        run: |
+          echo "Running PR benchmarks..."
+          go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > pr_bench.txt
+
+          if [ "$ACT" = "true" ]; then
+            echo "Running in local ACT environment, skipping fetch and using local main..."
+            git checkout main -- internal/ads api/proto/events.proto
+          else
+            echo "Fetching baseline from main..."
+            git fetch origin main
+            git checkout origin/main -- internal/ads api/proto/events.proto
+          fi
+
+          # Remove vtproto file if it doesn't exist on main to prevent compilation mismatch
+          rm -f internal/ads/pb/events_vtproto.pb.go
+
+          echo "Running baseline benchmarks..."
+          go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > baseline_bench.txt
+
+          # Restore PR files for compilation and validation
+          git checkout HEAD -- internal/ads api/proto/events.proto
+
+          echo "Executing performance gate..."
+          go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt > gate_report.txt
+          cat gate_report.txt
+
+      - name: Upload Benchmark Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            pr_bench.txt
+            baseline_bench.txt
+            gate_report.txt

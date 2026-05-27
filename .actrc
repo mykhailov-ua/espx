@@ -1,3 +1,4 @@
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
+-P self-hosted=catthehacker/ubuntu:act-latest
 --container-options --cpus=2
 --container-options --memory=7g
