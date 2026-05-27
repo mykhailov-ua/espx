@@ -51,6 +51,20 @@ func NewPostgresStore(queries db.Querier, writeTimeout time.Duration) *PostgresS
 	}
 }
 
+// StoreBatch persists a block of ingestion events into PostgreSQL using optimized array-based bulk inserts.
+//
+// Memory Impact:
+//   - Near zero heap allocations. Recycles slice containers (postgresBatchArrays) via postgresBatchArraysPool.
+//     Dynamically inflates array capacity if the incoming batch size exceeds pre-allocated limits.
+//
+// Concurrency:
+//   - Thread-safe. Designed to safely run concurrent batch flushes across multiple worker threads
+//     by utilizing connection-pool-based pgx queries.
+//
+// Performance Hacks:
+//   - pgx Array Batching: Passes bulk parameters as Go slices mapped directly to PostgreSQL arrays,
+//     reducing multi-statement round-trip latency to a single SQL query execution cycle:
+//     "InsertEventsBatch" executes a single UNNEST statement over the arrays.
 func (s *PostgresStore) StoreBatch(ctx context.Context, events []*domain.Event) error {
 	if len(events) == 0 {
 		return nil

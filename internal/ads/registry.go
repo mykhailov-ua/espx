@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -40,6 +41,14 @@ type campaignReplicaDTO struct {
 	RegistryStatus   string                `json:"registry_status"`
 }
 
+// Registry maintains a dynamic, in-memory replica of active advertisement campaigns.
+//
+// Concurrency:
+//   - Read Operations (Exists, GetCampaign, GetCustomerID): Completely lock-free. Operates on a double-buffered
+//     immutable campaign map using Go's atomic pointer swaps (atomic.Value).
+//   - Write/Sync Operations (Add, Sync): Mutex-serialized. Uses a Copy-On-Write (COW) pattern to update campaign
+//     definitions, cloning the backing map and swapping pointers atomically to eliminate read lock contention
+//     on high-throughput hot paths.
 type Registry struct {
 	repo          db.Querier
 	data          atomic.Value // holds map[uuid.UUID]campaignInfo
@@ -121,6 +130,14 @@ func (r *Registry) Add(id, customerID uuid.UUID, brandID *uuid.UUID, brandFcapKe
 	idStr := id.String()
 	customerIDStr := customerID.String()
 	dailyBudgetMicro := dailyBudget
+
+	var fcapPrefix string
+	if brandFcapKey != "" {
+		fcapPrefix = brandFcapKey + ":u:"
+	} else {
+		fcapPrefix = "fcap:c:" + idStr + ":u:"
+	}
+
 	info := campaignInfo{
 		campaign: &domain.Campaign{
 			ID:                  id,
@@ -142,6 +159,11 @@ func (r *Registry) Add(id, customerID uuid.UUID, brandID *uuid.UUID, brandFcapKe
 			FreqWindow:          freqWindow,
 			FreqWindowAny:       freqWindow,
 			TargetCountries:     countries,
+			BudgetCampaignKey:   "budget:campaign:" + idStr,
+			CampaignSyncKey:     "budget:sync:campaign:" + idStr,
+			CustomerSyncKey:     "budget:sync:customer:" + customerIDStr,
+			FcapKeyPrefix:       fcapPrefix,
+			DailySpendKeyPrefix: "budget:daily_spent:campaign:" + idStr + ":",
 		},
 		status: db.CampaignStatusTypeACTIVE,
 	}
@@ -164,7 +186,17 @@ func (r *Registry) Add(id, customerID uuid.UUID, brandID *uuid.UUID, brandFcapKe
 	}
 }
 
-// Sync updates the registry from the database. Falls back to local JSON replica if PostgreSQL is down.
+// Sync loads active campaigns from PostgreSQL and updates the local double-buffered memory map.
+//
+// Memory Impact:
+// - Allocates a fresh campaign map to perform Copy-on-Write swap.
+//
+// Concurrency:
+// - Mutex serialized to isolate write/sync operations. Safe to call concurrently from background loops.
+//
+// Recovery/Fault Tolerance:
+//   - If PostgreSQL becomes unreachable, dynamically attempts to reload campaign state from the local
+//     JSON replica file (`campaigns_replica.json`) to prevent system startup failures.
 func (r *Registry) Sync(ctx context.Context) (int, error) {
 	rows, err := r.repo.ListActiveCampaigns(ctx)
 	if err != nil {
@@ -187,6 +219,16 @@ func (r *Registry) Sync(ctx context.Context) (int, error) {
 	for _, row := range rows {
 		id := uuid.UUID(row.ID.Bytes)
 
+		// Measure the lag between the database-recorded UpdatedAt timestamp and the
+		// current time at cache load. This captures end-to-end propagation delay from
+		// management write → PostgreSQL → Sync → in-memory registry.
+		if row.UpdatedAt.Valid {
+			lag := time.Since(row.UpdatedAt.Time).Seconds()
+			if lag >= 0 {
+				metrics.RegistrySyncLag.Observe(lag)
+			}
+		}
+
 		loc, err := time.LoadLocation(row.Timezone)
 		if err != nil {
 			slog.Warn("failed to load location, fallback to UTC", "campaign", id, "timezone", row.Timezone)
@@ -204,6 +246,14 @@ func (r *Registry) Sync(ctx context.Context) (int, error) {
 
 		idStr := id.String()
 		customerIDStr := customerID.String()
+
+		var fcapPrefix string
+		if row.BrandFcapKey != "" {
+			fcapPrefix = row.BrandFcapKey + ":u:"
+		} else {
+			fcapPrefix = "fcap:c:" + idStr + ":u:"
+		}
+
 		fresh[id] = campaignInfo{
 			campaign: &domain.Campaign{
 				ID:                  id,
@@ -225,6 +275,11 @@ func (r *Registry) Sync(ctx context.Context) (int, error) {
 				FreqWindow:          row.FreqWindow.Int32,
 				FreqWindowAny:       row.FreqWindow.Int32,
 				TargetCountries:     SliceToMap(row.TargetCountries),
+				BudgetCampaignKey:   "budget:campaign:" + idStr,
+				CampaignSyncKey:     "budget:sync:campaign:" + idStr,
+				CustomerSyncKey:     "budget:sync:customer:" + customerIDStr,
+				FcapKeyPrefix:       fcapPrefix,
+				DailySpendKeyPrefix: "budget:daily_spent:campaign:" + idStr + ":",
 			},
 			status: row.Status,
 		}
@@ -350,14 +405,24 @@ func (r *Registry) loadReplica() (map[uuid.UUID]campaignInfo, error) {
 			}
 		}
 
+		idStr := dto.ID.String()
+		customerIDStr := dto.CustomerID.String()
+
+		var fcapPrefix string
+		if dto.BrandFcapKey != "" {
+			fcapPrefix = dto.BrandFcapKey + ":u:"
+		} else {
+			fcapPrefix = "fcap:c:" + idStr + ":u:"
+		}
+
 		m[dto.ID] = campaignInfo{
 			campaign: &domain.Campaign{
 				ID:                  dto.ID,
-				IDStr:               dto.ID.String(),
-				IDStrAny:            dto.ID.String(),
+				IDStr:               idStr,
+				IDStrAny:            idStr,
 				CustomerID:          dto.CustomerID,
-				CustomerIDStr:       dto.CustomerID.String(),
-				CustomerIDStrAny:    dto.CustomerID.String(),
+				CustomerIDStr:       customerIDStr,
+				CustomerIDStrAny:    customerIDStr,
 				BrandID:             dto.BrandID,
 				BrandFcapKey:        dto.BrandFcapKey,
 				Name:                dto.Name,
@@ -375,6 +440,11 @@ func (r *Registry) loadReplica() (map[uuid.UUID]campaignInfo, error) {
 				FreqWindow:          dto.FreqWindow,
 				FreqWindowAny:       dto.FreqWindow,
 				TargetCountries:     countries,
+				BudgetCampaignKey:   "budget:campaign:" + idStr,
+				CampaignSyncKey:     "budget:sync:campaign:" + idStr,
+				CustomerSyncKey:     "budget:sync:customer:" + customerIDStr,
+				FcapKeyPrefix:       fcapPrefix,
+				DailySpendKeyPrefix: "budget:daily_spent:campaign:" + idStr + ":",
 			},
 			status: db.CampaignStatusType(dto.RegistryStatus),
 		}

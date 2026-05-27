@@ -30,6 +30,18 @@ func NewClickHouseStore(conn driver.Conn, writeTimeout time.Duration) *ClickHous
 	}
 }
 
+// StoreBatch persists a block of events to ClickHouse, executing transient failure retry loops.
+//
+// Memory Impact:
+// - Minimizes heap allocations by retrieving categorization slices (*[]*domain.Event) from slicePool.
+//
+// Concurrency:
+// - Thread-safe. Connection resources are shared safely across worker execution boundaries.
+//
+// Batching & Partial Failures:
+//   - Retries: Incurs exponential backoff on write failures up to MaxRetries.
+//   - Deduplication: Uses the domain.Event.InsertedToCH flag to mark successfully written elements.
+//     On subsequent retries, already-written events are skipped, preventing database duplicates.
 func (s *ClickHouseStore) StoreBatch(ctx context.Context, events []*domain.Event) error {
 	if len(events) == 0 {
 		return nil
