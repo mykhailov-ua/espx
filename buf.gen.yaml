@@ -8,3 +8,9 @@ plugins:
     out: .
     opt:
       - module=github.com/mykhailov-ua/ad-event-processor
+  - name: go-vtproto
+    out: .
+    opt:
+      - module=github.com/mykhailov-ua/ad-event-processor
+      - features=marshal+unmarshal+size+pool
+

@@ -5,16 +5,16 @@ package ads.v1;
 option go_package = "github.com/mykhailov-ua/ad-event-processor/internal/ads/pb";
 
 message AdEvent {
-  string campaign_id = 1;
-  string event_type = 2;
+  bytes campaign_id = 1;
+  bytes event_type = 2;
   EventMetadata metadata = 3;
 }
 
 message EventMetadata {
-  string click_id = 1;
-  string user_id = 2;
-  string device_type = 3;
-  string os = 4;
+  bytes click_id = 1;
+  bytes user_id = 2;
+  bytes device_type = 3;
+  bytes os = 4;
   map<string, string> extra = 5;
   bytes extra_bytes = 6;
 }
@@ -25,20 +25,20 @@ message TrackResponse {
 }
 
 message AdStreamEvent {
-  string click_id = 1;
+  bytes click_id = 1;
   bytes campaign_id = 2;
-  string event_type = 3;
+  bytes event_type = 3;
   bytes payload = 4;
-  string ip = 5;
-  string ua = 6;
+  bytes ip = 5;
+  bytes ua = 6;
   int64 created_at_unix = 7;
 }
 
 message AdDLQEvent {
   AdStreamEvent original_event = 1;
-  string error = 2;
-  string original_id = 3;
+  bytes error = 2;
+  bytes original_id = 3;
   int64 failed_at_unix = 4;
-  string worker_id = 5;
+  bytes worker_id = 5;
   int32 retry_count = 6;
 }

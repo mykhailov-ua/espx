@@ -23,8 +23,8 @@ const (
 
 type AdEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	CampaignId    string                 `protobuf:"bytes,1,opt,name=campaign_id,json=campaignId,proto3" json:"campaign_id,omitempty"`
-	EventType     string                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	CampaignId    []byte                 `protobuf:"bytes,1,opt,name=campaign_id,json=campaignId,proto3" json:"campaign_id,omitempty"`
+	EventType     []byte                 `protobuf:"bytes,2,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
 	Metadata      *EventMetadata         `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -60,18 +60,18 @@ func (*AdEvent) Descriptor() ([]byte, []int) {
 	return file_api_proto_events_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *AdEvent) GetCampaignId() string {
+func (x *AdEvent) GetCampaignId() []byte {
 	if x != nil {
 		return x.CampaignId
 	}
-	return ""
+	return nil
 }
 
-func (x *AdEvent) GetEventType() string {
+func (x *AdEvent) GetEventType() []byte {
 	if x != nil {
 		return x.EventType
 	}
-	return ""
+	return nil
 }
 
 func (x *AdEvent) GetMetadata() *EventMetadata {
@@ -83,10 +83,10 @@ func (x *AdEvent) GetMetadata() *EventMetadata {
 
 type EventMetadata struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClickId       string                 `protobuf:"bytes,1,opt,name=click_id,json=clickId,proto3" json:"click_id,omitempty"`
-	UserId        string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	DeviceType    string                 `protobuf:"bytes,3,opt,name=device_type,json=deviceType,proto3" json:"device_type,omitempty"`
-	Os            string                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
+	ClickId       []byte                 `protobuf:"bytes,1,opt,name=click_id,json=clickId,proto3" json:"click_id,omitempty"`
+	UserId        []byte                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	DeviceType    []byte                 `protobuf:"bytes,3,opt,name=device_type,json=deviceType,proto3" json:"device_type,omitempty"`
+	Os            []byte                 `protobuf:"bytes,4,opt,name=os,proto3" json:"os,omitempty"`
 	Extra         map[string]string      `protobuf:"bytes,5,rep,name=extra,proto3" json:"extra,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	ExtraBytes    []byte                 `protobuf:"bytes,6,opt,name=extra_bytes,json=extraBytes,proto3" json:"extra_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -123,32 +123,32 @@ func (*EventMetadata) Descriptor() ([]byte, []int) {
 	return file_api_proto_events_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *EventMetadata) GetClickId() string {
+func (x *EventMetadata) GetClickId() []byte {
 	if x != nil {
 		return x.ClickId
 	}
-	return ""
+	return nil
 }
 
-func (x *EventMetadata) GetUserId() string {
+func (x *EventMetadata) GetUserId() []byte {
 	if x != nil {
 		return x.UserId
 	}
-	return ""
+	return nil
 }
 
-func (x *EventMetadata) GetDeviceType() string {
+func (x *EventMetadata) GetDeviceType() []byte {
 	if x != nil {
 		return x.DeviceType
 	}
-	return ""
+	return nil
 }
 
-func (x *EventMetadata) GetOs() string {
+func (x *EventMetadata) GetOs() []byte {
 	if x != nil {
 		return x.Os
 	}
-	return ""
+	return nil
 }
 
 func (x *EventMetadata) GetExtra() map[string]string {
@@ -219,12 +219,12 @@ func (x *TrackResponse) GetStatus() string {
 
 type AdStreamEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ClickId       string                 `protobuf:"bytes,1,opt,name=click_id,json=clickId,proto3" json:"click_id,omitempty"`
+	ClickId       []byte                 `protobuf:"bytes,1,opt,name=click_id,json=clickId,proto3" json:"click_id,omitempty"`
 	CampaignId    []byte                 `protobuf:"bytes,2,opt,name=campaign_id,json=campaignId,proto3" json:"campaign_id,omitempty"`
-	EventType     string                 `protobuf:"bytes,3,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	EventType     []byte                 `protobuf:"bytes,3,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
 	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
-	Ip            string                 `protobuf:"bytes,5,opt,name=ip,proto3" json:"ip,omitempty"`
-	Ua            string                 `protobuf:"bytes,6,opt,name=ua,proto3" json:"ua,omitempty"`
+	Ip            []byte                 `protobuf:"bytes,5,opt,name=ip,proto3" json:"ip,omitempty"`
+	Ua            []byte                 `protobuf:"bytes,6,opt,name=ua,proto3" json:"ua,omitempty"`
 	CreatedAtUnix int64                  `protobuf:"varint,7,opt,name=created_at_unix,json=createdAtUnix,proto3" json:"created_at_unix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -260,11 +260,11 @@ func (*AdStreamEvent) Descriptor() ([]byte, []int) {
 	return file_api_proto_events_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *AdStreamEvent) GetClickId() string {
+func (x *AdStreamEvent) GetClickId() []byte {
 	if x != nil {
 		return x.ClickId
 	}
-	return ""
+	return nil
 }
 
 func (x *AdStreamEvent) GetCampaignId() []byte {
@@ -274,11 +274,11 @@ func (x *AdStreamEvent) GetCampaignId() []byte {
 	return nil
 }
 
-func (x *AdStreamEvent) GetEventType() string {
+func (x *AdStreamEvent) GetEventType() []byte {
 	if x != nil {
 		return x.EventType
 	}
-	return ""
+	return nil
 }
 
 func (x *AdStreamEvent) GetPayload() []byte {
@@ -288,18 +288,18 @@ func (x *AdStreamEvent) GetPayload() []byte {
 	return nil
 }
 
-func (x *AdStreamEvent) GetIp() string {
+func (x *AdStreamEvent) GetIp() []byte {
 	if x != nil {
 		return x.Ip
 	}
-	return ""
+	return nil
 }
 
-func (x *AdStreamEvent) GetUa() string {
+func (x *AdStreamEvent) GetUa() []byte {
 	if x != nil {
 		return x.Ua
 	}
-	return ""
+	return nil
 }
 
 func (x *AdStreamEvent) GetCreatedAtUnix() int64 {
@@ -312,10 +312,10 @@ func (x *AdStreamEvent) GetCreatedAtUnix() int64 {
 type AdDLQEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	OriginalEvent *AdStreamEvent         `protobuf:"bytes,1,opt,name=original_event,json=originalEvent,proto3" json:"original_event,omitempty"`
-	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	OriginalId    string                 `protobuf:"bytes,3,opt,name=original_id,json=originalId,proto3" json:"original_id,omitempty"`
+	Error         []byte                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	OriginalId    []byte                 `protobuf:"bytes,3,opt,name=original_id,json=originalId,proto3" json:"original_id,omitempty"`
 	FailedAtUnix  int64                  `protobuf:"varint,4,opt,name=failed_at_unix,json=failedAtUnix,proto3" json:"failed_at_unix,omitempty"`
-	WorkerId      string                 `protobuf:"bytes,5,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	WorkerId      []byte                 `protobuf:"bytes,5,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	RetryCount    int32                  `protobuf:"varint,6,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -358,18 +358,18 @@ func (x *AdDLQEvent) GetOriginalEvent() *AdStreamEvent {
 	return nil
 }
 
-func (x *AdDLQEvent) GetError() string {
+func (x *AdDLQEvent) GetError() []byte {
 	if x != nil {
 		return x.Error
 	}
-	return ""
+	return nil
 }
 
-func (x *AdDLQEvent) GetOriginalId() string {
+func (x *AdDLQEvent) GetOriginalId() []byte {
 	if x != nil {
 		return x.OriginalId
 	}
-	return ""
+	return nil
 }
 
 func (x *AdDLQEvent) GetFailedAtUnix() int64 {
@@ -379,11 +379,11 @@ func (x *AdDLQEvent) GetFailedAtUnix() int64 {
 	return 0
 }
 
-func (x *AdDLQEvent) GetWorkerId() string {
+func (x *AdDLQEvent) GetWorkerId() []byte {
 	if x != nil {
 		return x.WorkerId
 	}
-	return ""
+	return nil
 }
 
 func (x *AdDLQEvent) GetRetryCount() int32 {
@@ -399,17 +399,17 @@ const file_api_proto_events_proto_rawDesc = "" +
 	"\n" +
 	"\x16api/proto/events.proto\x12\x06ads.v1\"|\n" +
 	"\aAdEvent\x12\x1f\n" +
-	"\vcampaign_id\x18\x01 \x01(\tR\n" +
+	"\vcampaign_id\x18\x01 \x01(\fR\n" +
 	"campaignId\x12\x1d\n" +
 	"\n" +
-	"event_type\x18\x02 \x01(\tR\teventType\x121\n" +
+	"event_type\x18\x02 \x01(\fR\teventType\x121\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x15.ads.v1.EventMetadataR\bmetadata\"\x87\x02\n" +
 	"\rEventMetadata\x12\x19\n" +
-	"\bclick_id\x18\x01 \x01(\tR\aclickId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1f\n" +
-	"\vdevice_type\x18\x03 \x01(\tR\n" +
+	"\bclick_id\x18\x01 \x01(\fR\aclickId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\fR\x06userId\x12\x1f\n" +
+	"\vdevice_type\x18\x03 \x01(\fR\n" +
 	"deviceType\x12\x0e\n" +
-	"\x02os\x18\x04 \x01(\tR\x02os\x126\n" +
+	"\x02os\x18\x04 \x01(\fR\x02os\x126\n" +
 	"\x05extra\x18\x05 \x03(\v2 .ads.v1.EventMetadata.ExtraEntryR\x05extra\x12\x1f\n" +
 	"\vextra_bytes\x18\x06 \x01(\fR\n" +
 	"extraBytes\x1a8\n" +
@@ -422,23 +422,23 @@ const file_api_proto_events_proto_rawDesc = "" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\"\xcc\x01\n" +
 	"\rAdStreamEvent\x12\x19\n" +
-	"\bclick_id\x18\x01 \x01(\tR\aclickId\x12\x1f\n" +
+	"\bclick_id\x18\x01 \x01(\fR\aclickId\x12\x1f\n" +
 	"\vcampaign_id\x18\x02 \x01(\fR\n" +
 	"campaignId\x12\x1d\n" +
 	"\n" +
-	"event_type\x18\x03 \x01(\tR\teventType\x12\x18\n" +
+	"event_type\x18\x03 \x01(\fR\teventType\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12\x0e\n" +
-	"\x02ip\x18\x05 \x01(\tR\x02ip\x12\x0e\n" +
-	"\x02ua\x18\x06 \x01(\tR\x02ua\x12&\n" +
+	"\x02ip\x18\x05 \x01(\fR\x02ip\x12\x0e\n" +
+	"\x02ua\x18\x06 \x01(\fR\x02ua\x12&\n" +
 	"\x0fcreated_at_unix\x18\a \x01(\x03R\rcreatedAtUnix\"\xe5\x01\n" +
 	"\n" +
 	"AdDLQEvent\x12<\n" +
 	"\x0eoriginal_event\x18\x01 \x01(\v2\x15.ads.v1.AdStreamEventR\roriginalEvent\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1f\n" +
-	"\voriginal_id\x18\x03 \x01(\tR\n" +
+	"\x05error\x18\x02 \x01(\fR\x05error\x12\x1f\n" +
+	"\voriginal_id\x18\x03 \x01(\fR\n" +
 	"originalId\x12$\n" +
 	"\x0efailed_at_unix\x18\x04 \x01(\x03R\ffailedAtUnix\x12\x1b\n" +
-	"\tworker_id\x18\x05 \x01(\tR\bworkerId\x12\x1f\n" +
+	"\tworker_id\x18\x05 \x01(\fR\bworkerId\x12\x1f\n" +
 	"\vretry_count\x18\x06 \x01(\x05R\n" +
 	"retryCountB<Z:github.com/mykhailov-ua/ad-event-processor/internal/ads/pbb\x06proto3"
 
