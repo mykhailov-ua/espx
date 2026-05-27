@@ -15,9 +15,9 @@ The architecture is structured into five distinct operational layers communicati
    - **Auth Service (`:51051`)**: Internal gRPC microservice handling `Argon2id` password hashing and issuing cryptographic PASETO tokens.
 
 3. **Ingestion Plane (Tracker Replicas)**
-   - Stateless Go instances (`:8181-8184`) running in `network_mode: host` to bypass bridge network layers and optimize packet processing throughput.
-   - Employs `sync.Pool` object recycling to maintain zero heap allocations on the ingestion path.
-   - Eliminates allocations on the hot path by utilizing pre-generated domain UUID strings from a registry cache and representing budgets as 64-bit integers scaled by 1,000,000 (10^6) to avoid decimal parsing overhead.
+   - Stateless Go instances (`:8181-8184`) running in `network_mode: host` to bypass bridge network layers, using event-driven `gnet/v2` engines with physical CPU thread-to-core pinning (`runtime.LockOSThread()`) to optimize connection processing.
+   - Employs `sync.Pool` object recycling (enforcing heap-allocated slice pointer targets to prevent stack-to-heap escapes) to maintain zero heap allocations on `/track`, `/health`, and `/metrics` ingestion paths.
+   - Eliminates allocations on the hot path by utilizing pre-generated domain UUID strings from a registry cache, representing budgets as 64-bit integers scaled by 1,000,000 (10^6), and adopting raw `bytes` schema definitions in protobuf pipelines to allow zero-copy unmarshaling.
 
 4. **Edge Caching Layer (Redis Shard Cluster)**
    - 6-node Redis cluster sharded via consistent JumpHash indexing.
@@ -49,7 +49,7 @@ The architecture is structured into five distinct operational layers communicati
     - **Arithmetic Optimization**: Operates strictly on scaled `int64` micro-units via the zero-allocation `NumericToMicro` integer scaling parser, completely avoiding floating-point precision issues and heap-allocated `decimal.Decimal` serialization.
 
 ### 2. Ad Event Ingestion & Processing Lifecycle
-1. **Ingress**: Telemetry events (impressions and clicks) reach Tracker replicas (`:8181-8184`) via Nginx over HTTP/3 in Protobuf or JSON format. Replicas operate in `network_mode: host` to bypass Docker bridge NAT translation. Ingestion uses pre-allocated domain UUID strings from a registry cache and represents campaign budgets as 64-bit integers scaled by 1,000,000 (10^6) to prevent heap allocations. Replicas utilize `sync.Pool` for payload buffer and event structure reuse.
+1. **Ingress**: Telemetry events (impressions and clicks) reach Tracker replicas (`:8181-8184`) via Nginx over HTTP/3. Tracker replicas execute event loops using `github.com/panjf2000/gnet/v2` with `SO_REUSEPORT` and `TCP_NODELAY` socket configurations. A custom zero-copy DFA HTTP/1.1 stream scanner extracts headers as raw byte slices directly referencing the incoming socket ring buffer. Ingestion uses pre-allocated domain UUID strings from a registry cache and campaign budgets represented as 64-bit integers scaled by 10^6. Protobuf schemas utilize `bytes` types to facilitate zero-copy vtproto deserialization, and the engine recycles slice memory using `sync.Pool` retaining heap-allocated backing array pointers (`*[]byte`) to guarantee 0 B/op and 0 alloc/op.
 2. **Dynamic Geo Bid Floor Verification**: Tracker replicas load configured publisher floor limits per geo-country code into a thread-safe `geoFloors sync.Map`.
     - **IP Country Resolution**: The incoming client IP is mapped to an ISO country code via the `GeoProvider` interface.
     - **Zero-Allocation JSON Scanning**: If a floor limit is configured for the resolved country, a specialized DFA scanner `parseBidMicro` traverses the raw event payload byte array linearly, extracting the bid value without heap allocations or reflection. Bids below the geo bid floor are rejected early with `ErrBidFloorNotMet`, preventing subsequent Redis script evaluations.

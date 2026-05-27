@@ -115,3 +115,27 @@ The DLQ tool handles archiving, restoring, requeueing, and inspecting events fro
   ```
   Prints human-readable representations of live stream messages (decoding Protobuf structures and falling back to legacy flat-maps).
 
+## Performance Gate CI/CD Pipeline
+
+To ensure the primary `/ads` ingestion hot path maintains zero-allocation behavior and prevents latency regression, a strict Performance Gate is integrated into the CI/CD pipeline.
+
+### Architectural Setup
+* **Hardware Profile**: The benchmark checks must execute exclusively on a **Self-Hosted Dedicated Runner** (e.g., Hetzner CCX or bare-metal instances). Shared hosting environments (such as default GitHub-hosted runners) are prohibited due to virtual machine hypervisor steal time and CPU noise.
+* **CPU Tuning**: The pipeline forces the host CPU governor into `performance` mode prior to execution to lock CPU frequency and eliminate scaling latency artifacts:
+  ```bash
+  echo "performance" | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+  ```
+
+### Analysis & Gate Criteria
+The execution utilizes `go test -bench=BenchmarkAdsPacketHandler -benchmem -count=10` on both baseline (`main` branch) and target PR code. The outputs are compared via `benchstat`:
+1. **Memory Leak Control**: Any output showing `allocs/op > 0` fails the pipeline.
+2. **Memory Bloat Control**: Any output showing `B/op > 0` fails the pipeline.
+3. **CPU Regression Control**: Any time/op metrics demonstrating a latency regression exceeding `12.0%` with statistical significance ($p < 0.05$) fail the pipeline.
+
+Upon a violation, the gate script `scripts/perf_gate.go` exits with code `1`, blocking the pull request merge.
+
+### Local Execution & Testing
+You can emulate the performance gate analysis locally using two benchmark files:
+```bash
+go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt
+```
