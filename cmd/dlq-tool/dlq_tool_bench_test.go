@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 	"google.golang.org/protobuf/proto"
 )
@@ -24,18 +25,18 @@ func TestDLQBackupMetrics(t *testing.T) {
 		cid := uuid.New()
 		events[i] = &pb.AdDLQEvent{
 			OriginalEvent: &pb.AdStreamEvent{
-				ClickId:       fmt.Sprintf("click_%d_%s", i, uuid.New().String()),
+				ClickId:       ads.UnsafeBytes(fmt.Sprintf("click_%d_%s", i, uuid.New().String())),
 				CampaignId:    cid[:],
-				EventType:     "click",
+				EventType:     []byte("click"),
 				Payload:       []byte(`{"geo":"US","device":"mobile","ad_position":"top","network":"search"}`),
-				Ip:            "192.168.1.100",
-				Ua:            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+				Ip:            []byte("192.168.1.100"),
+				Ua:            []byte("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
 				CreatedAtUnix: time.Now().Unix() - int64(i),
 			},
-			Error:        "database connection timeout during click processing",
-			OriginalId:   fmt.Sprintf("msg_%d", i),
+			Error:        []byte("database connection timeout during click processing"),
+			OriginalId:   ads.UnsafeBytes(fmt.Sprintf("msg_%d", i)),
 			FailedAtUnix: time.Now().Unix(),
-			WorkerId:     "worker_node_03_tuf",
+			WorkerId:     []byte("worker_node_03_tuf"),
 			RetryCount:   int32(i % 5),
 		}
 	}
@@ -63,20 +64,20 @@ func TestDLQBackupMetrics(t *testing.T) {
 	for _, ev := range events {
 		campUUID, _ := uuid.FromBytes(ev.OriginalEvent.CampaignId)
 		record := map[string]interface{}{
-			"id":             ev.OriginalId,
+			"id":             ads.UnsafeString(ev.OriginalId),
 			"format":         "protobuf_dlq",
-			"error":          ev.Error,
-			"original_id":    ev.OriginalId,
+			"error":          ads.UnsafeString(ev.Error),
+			"original_id":    ads.UnsafeString(ev.OriginalId),
 			"failed_at_unix": ev.FailedAtUnix,
-			"worker_id":      ev.WorkerId,
+			"worker_id":      ads.UnsafeString(ev.WorkerId),
 			"retry_count":    ev.RetryCount,
 			"original_event": map[string]interface{}{
-				"click_id":        ev.OriginalEvent.ClickId,
+				"click_id":        ads.UnsafeString(ev.OriginalEvent.ClickId),
 				"campaign_id":     campUUID.String(),
-				"event_type":      ev.OriginalEvent.EventType,
-				"payload":         string(ev.OriginalEvent.Payload),
-				"ip":              ev.OriginalEvent.Ip,
-				"ua":              ev.OriginalEvent.Ua,
+				"event_type":      ads.UnsafeString(ev.OriginalEvent.EventType),
+				"payload":         ads.UnsafeString(ev.OriginalEvent.Payload),
+				"ip":              ads.UnsafeString(ev.OriginalEvent.Ip),
+				"ua":              ads.UnsafeString(ev.OriginalEvent.Ua),
 				"created_at_unix": ev.OriginalEvent.CreatedAtUnix,
 			},
 		}
