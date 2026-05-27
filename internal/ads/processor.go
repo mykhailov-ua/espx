@@ -16,9 +16,14 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
-	"google.golang.org/protobuf/proto"
 )
 
+// StreamConsumer implements parallel processing of Redis streams with exact-once delivery guarantees.
+//
+// Concurrency:
+// - Manages multiple worker goroutines executing pipeline ingress operations.
+// - Features an embedded CircuitBreaker to handle database connection issues and isolate failure zones.
+// - Safe for concurrent startup/shutdown operations via synchronized mutex locks.
 type StreamConsumer struct {
 	store         domain.EventStore
 	rdb           redis.UniversalClient
@@ -139,6 +144,19 @@ func (p *StreamConsumer) workerConsumerID(workerIdx int) string {
 	return fmt.Sprintf("%s-w%d", p.consumerID, workerIdx)
 }
 
+// worker executes a continuous batch-consumption cycle, reading events from the stream and flushing them to persistent stores.
+//
+// Memory Impact:
+// - Bounded allocations. Pools are leveraged inside parseMessage to recycle transient objects.
+//
+// Concurrency:
+// - Thread-safe. Designed to scale across multiple CPU cores, isolating connection failures through local worker contexts.
+//
+// Operational Stages:
+// 1. Recovery Phase: Pulls pending events previously assigned to the worker and flushes them first.
+// 2. Main Loop: Pulls batches of size Count via XReadGroup.
+// 3. Pacing & Timers: Batch is processed when count equals batchSize or the last flush was more than flushInt ago.
+// 4. Graceful Draining: Listens for context cancellation, completes active flush cycles, and returns.
 func (p *StreamConsumer) worker(ctx context.Context, workerIdx int) {
 	workerID := p.workerConsumerID(workerIdx)
 	defer func() {
@@ -415,11 +433,20 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 	}
 }
 
-var dlqEventPool = sync.Pool{
-	New: func() any {
-		return new(pb.AdDLQEvent)
-	},
-}
+var (
+	dlqEventPool = sync.Pool{
+		New: func() any {
+			return new(pb.AdDLQEvent)
+		},
+	}
+	dlqValuesPool = sync.Pool{
+		New: func() any {
+			slice := make([]any, 2)
+			slice[0] = "d"
+			return &slice
+		},
+	}
+)
 
 func (p *StreamConsumer) moveToDLQ(ctx context.Context, batch []*domain.Event, msgIDs []string, workerID string, retryCount int, err error) error {
 	errStr := err.Error()
@@ -427,6 +454,20 @@ func (p *StreamConsumer) moveToDLQ(ctx context.Context, batch []*domain.Event, m
 	pipeWrite := p.rdb.Pipeline()
 
 	writtenMsgIDs := make([]string, 0, len(batch))
+	valuesPtrs := make([]*[]any, 0, len(batch))
+	bufPtrs := make([]*[]byte, 0, len(batch))
+	wrapPtrs := make([]*ByteSliceValue, 0, len(batch))
+	defer func() {
+		for _, ptr := range valuesPtrs {
+			dlqValuesPool.Put(ptr)
+		}
+		for _, ptr := range bufPtrs {
+			byteBufPool.Put(ptr)
+		}
+		for _, ptr := range wrapPtrs {
+			byteSliceValuePool.Put(ptr)
+		}
+	}()
 
 	execCtx, execCancel := context.WithTimeout(context.Background(), p.writeTimeout)
 	defer execCancel()
@@ -436,39 +477,64 @@ func (p *StreamConsumer) moveToDLQ(ctx context.Context, batch []*domain.Event, m
 		if pbDLQ.OriginalEvent == nil {
 			pbDLQ.OriginalEvent = new(pb.AdStreamEvent)
 		} else {
-			pbDLQ.OriginalEvent.Reset()
+			DeepResetAdStreamEvent(pbDLQ.OriginalEvent)
 		}
-		pbDLQ.Error = errStr
-		pbDLQ.OriginalId = msgIDs[i]
+		pbDLQ.Error = append(pbDLQ.Error[:0], errStr...)
+		pbDLQ.OriginalId = append(pbDLQ.OriginalId[:0], msgIDs[i]...)
 		pbDLQ.FailedAtUnix = time.Now().Unix()
-		pbDLQ.WorkerId = workerID
+		pbDLQ.WorkerId = append(pbDLQ.WorkerId[:0], workerID...)
 		pbDLQ.RetryCount = int32(retryCount)
 
-		pbDLQ.OriginalEvent.ClickId = e.ClickID
-		pbDLQ.OriginalEvent.CampaignId = e.CampaignID[:]
-		pbDLQ.OriginalEvent.EventType = e.Type
-		pbDLQ.OriginalEvent.Payload = e.Payload
-		pbDLQ.OriginalEvent.Ip = e.IP
-		pbDLQ.OriginalEvent.Ua = e.UA
+		pbDLQ.OriginalEvent.ClickId = append(pbDLQ.OriginalEvent.ClickId[:0], e.ClickID...)
+		pbDLQ.OriginalEvent.CampaignId = append(pbDLQ.OriginalEvent.CampaignId[:0], e.CampaignID[:]...)
+		pbDLQ.OriginalEvent.EventType = append(pbDLQ.OriginalEvent.EventType[:0], e.Type...)
+		pbDLQ.OriginalEvent.Payload = append(pbDLQ.OriginalEvent.Payload[:0], e.Payload...)
+		pbDLQ.OriginalEvent.Ip = append(pbDLQ.OriginalEvent.Ip[:0], e.IP...)
+		pbDLQ.OriginalEvent.Ua = append(pbDLQ.OriginalEvent.Ua[:0], e.UA...)
 		pbDLQ.OriginalEvent.CreatedAtUnix = e.CreatedAt.Unix()
 
-		data, marshalErr := proto.Marshal(pbDLQ)
+		size := pbDLQ.SizeVT()
+		bufPtr := byteBufPool.Get().(*[]byte)
+		buf := *bufPtr
+		if cap(buf) < size {
+			buf = make([]byte, size)
+		} else {
+			buf = buf[:size]
+		}
+
+		n, marshalErr := pbDLQ.MarshalToSizedBufferVT(buf)
 		if marshalErr != nil {
 			slog.Error("failed to marshal DLQ event", "error", marshalErr)
+			DeepResetAdDLQEvent(pbDLQ)
 			dlqEventPool.Put(pbDLQ)
+			*bufPtr = buf
+			byteBufPool.Put(bufPtr)
 			continue
 		}
 
+		data := buf[:n]
+		*bufPtr = buf
+		bufPtrs = append(bufPtrs, bufPtr)
+
+		DeepResetAdDLQEvent(pbDLQ)
 		dlqEventPool.Put(pbDLQ)
 		writtenMsgIDs = append(writtenMsgIDs, msgIDs[i])
+
+		valuesPtr := dlqValuesPool.Get().(*[]any)
+		values := *valuesPtr
+
+		wrap := byteSliceValuePool.Get().(*ByteSliceValue)
+		wrap.b = data
+		values[1] = wrap
+		wrapPtrs = append(wrapPtrs, wrap)
+
+		valuesPtrs = append(valuesPtrs, valuesPtr)
 
 		pipeWrite.XAdd(execCtx, &redis.XAddArgs{
 			Stream: "ad:events:dlq",
 			MaxLen: 100000,
 			Approx: true,
-			Values: map[string]interface{}{
-				"d": data,
-			},
+			Values: values,
 		})
 	}
 
@@ -524,26 +590,27 @@ func (p *StreamConsumer) parseMessage(id string, values map[string]interface{}) 
 
 	if rawBytesStr, ok := values["d"].(string); ok {
 		pbEvt := streamEventPool.Get().(*pb.AdStreamEvent)
-		pbEvt.Reset()
+		DeepResetAdStreamEvent(pbEvt)
 
-		buf := []byte(rawBytesStr)
-		if err := proto.Unmarshal(buf, pbEvt); err == nil {
-			evt.ClickID = strings.Clone(pbEvt.ClickId)
+		buf := UnsafeBytes(rawBytesStr)
+		if err := pbEvt.UnmarshalVT(buf); err == nil {
+			evt.ClickID = unsafeString(pbEvt.ClickId)
 			if len(pbEvt.CampaignId) == 16 {
 				copy(evt.CampaignID[:], pbEvt.CampaignId)
 			} else {
-				evt.CampaignID, _ = uuid.Parse(string(pbEvt.CampaignId))
+				evt.CampaignID, _ = uuid.ParseBytes(pbEvt.CampaignId)
 			}
-			evt.Type = strings.Clone(pbEvt.EventType)
+			evt.Type = unsafeString(pbEvt.EventType)
 			evt.Payload = append(evt.Payload[:0], pbEvt.Payload...)
-			evt.IP = strings.Clone(pbEvt.Ip)
-			evt.UA = strings.Clone(pbEvt.Ua)
+			evt.IP = unsafeString(pbEvt.Ip)
+			evt.UA = unsafeString(pbEvt.Ua)
 			if pbEvt.CreatedAtUnix > 0 {
 				evt.CreatedAt = time.Unix(pbEvt.CreatedAtUnix, 0)
 			}
 		} else {
 			slog.Error("failed to unmarshal stream event protobuf", "error", err)
 		}
+		DeepResetAdStreamEvent(pbEvt)
 		streamEventPool.Put(pbEvt)
 	} else {
 		if v, ok := values["click_id"].(string); ok {
@@ -730,6 +797,20 @@ func (p *StreamConsumer) janitor(ctx context.Context) {
 	}
 }
 
+// claimStuckMessages crawls the stream's Pending Entries List (PEL) using XAutoClaim, attempting to reclaim
+// messages that have been stranded or stuck under crashed workers.
+//
+// Memory Impact:
+// - Uses standard recycling pools when building DLQ marshaled objects to prevent memory fragmentation.
+//
+// Concurrency:
+// - Thread-safe. Executed sequentially within the janitor goroutine interval scope.
+//
+// Recovery & DLQ Invariants:
+//   - MinIdle check: Evaluates if a message remains pending without acknowledgment for longer than streamMinIdle.
+//   - XAutoClaim: Shifts ownership of expired messages to the active consumer.
+//   - DLQ Escalation: Increments a tracking counter in the "ad:events:retries" Redis hash for every claimed message.
+//     If a message's retry count exceeds maxRetries, it is treated as a poison pill, moved to the DLQ, and deleted from the main stream.
 func (p *StreamConsumer) claimStuckMessages(ctx context.Context) {
 	startID := "0-0"
 	for {
