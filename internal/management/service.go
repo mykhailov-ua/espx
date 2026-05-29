@@ -60,6 +60,19 @@ func NewService(pool *pgxpool.Pool, rdbs []redis.UniversalClient, sharder ads.Sh
 	return s
 }
 
+// StartReconWorker launches the financial reconciliation cold-path worker.
+// The worker only ever looks at data at least two hours old. This hard guarantee
+// removes all race conditions between reconciliation adjustments and the hot
+// settlement path (SyncWorker + Processor pool). Interval is typically 15-30m.
+func (s *Service) StartReconWorker(rdb redis.UniversalClient, interval time.Duration) {
+	s.wg.Add(1)
+	rw := NewReconWorker(s.pool, rdb, interval)
+	go func() {
+		defer s.wg.Done()
+		rw.Start(s.ctx)
+	}()
+}
+
 func (s *Service) GetPool() *pgxpool.Pool {
 	return s.pool
 }
@@ -138,7 +151,7 @@ func (s *Service) TopUpBalance(ctx context.Context, customerID uuid.UUID, amount
 }
 
 // CreateCampaign validates customer solvency and freezes the initial campaign budget within a single ACID transaction.
-// The budget limit is subsequently synchronized to the sharded Redis cluster to enable low-latency pacing evaluation at the edge.
+// The budget limit is subsequently synchronized to the sharded Redis pool to enable low-latency pacing evaluation at the edge.
 func (s *Service) CreateCampaign(ctx context.Context, customerID uuid.UUID, brandID *uuid.UUID, name string, budgetLimit int64, pacingMode db.PacingModeType, dailyBudget int64, timezone string, freqLimit, freqWindow int32, targetCountries []string, idempotencyKey string) (uuid.UUID, error) {
 	campaignID, _ := uuid.NewV7()
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {

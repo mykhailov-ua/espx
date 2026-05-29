@@ -78,6 +78,27 @@ var (
 		Help: "Ratio of discrepancy between Postgres and ClickHouse spend",
 	}, []string{"campaign_id"})
 
+	// Reconciliation Metrics
+	ReconRunsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ad_reconciliation_runs_total",
+		Help: "Total number of completed reconciliation runs",
+	}, []string{"status"})
+
+	ReconDiscrepanciesTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_reconciliation_discrepancies_total",
+		Help: "Total number of campaign discrepancies found",
+	})
+
+	ReconTotalDelta = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_reconciliation_total_delta_micro_units",
+		Help: "Absolute net discrepancy corrected by reconciliation in micro units",
+	})
+
+	ReconAdjustmentErrors = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ad_reconciliation_adjustment_errors_total",
+		Help: "Total number of errors during automated reconciliation corrections",
+	})
+
 	// gnet & Network Metrics
 	GnetPacketsReceived = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "ad_gnet_packets_received_total",

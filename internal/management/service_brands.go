@@ -34,7 +34,6 @@ func toBrandDTO(b db.AdvertiserBrand) BrandDTO {
 	}
 }
 
-// CreateBrand registers a new brand group under a customer profile.
 func (s *Service) CreateBrand(ctx context.Context, customerID uuid.UUID, name string) (uuid.UUID, error) {
 	brandID, err := uuid.NewV7()
 	if err != nil {
@@ -59,7 +58,6 @@ func (s *Service) CreateBrand(ctx context.Context, customerID uuid.UUID, name st
 	return brandID, nil
 }
 
-// GetBrandDTO retrieves a specific brand profile by its primary identifier.
 func (s *Service) GetBrandDTO(ctx context.Context, id uuid.UUID) (BrandDTO, error) {
 	q := db.New(s.pool)
 	b, err := q.GetBrand(ctx, ads.ToUUID(id))
@@ -69,7 +67,6 @@ func (s *Service) GetBrandDTO(ctx context.Context, id uuid.UUID) (BrandDTO, erro
 	return toBrandDTO(b), nil
 }
 
-// ListBrandsByCustomer lists all brand groups belonging to a specific customer profile.
 func (s *Service) ListBrandsByCustomer(ctx context.Context, customerID uuid.UUID) ([]BrandDTO, error) {
 	q := db.New(s.pool)
 	rows, err := q.ListBrandsByCustomer(ctx, ads.ToUUID(customerID))
@@ -84,14 +81,11 @@ func (s *Service) ListBrandsByCustomer(ctx context.Context, customerID uuid.UUID
 	return res, nil
 }
 
-// ConfigureBrandFcap updates the brand-level frequency capping rules.
-// It logs the administrative action and triggers an outbox event.
 func (s *Service) ConfigureBrandFcap(ctx context.Context, brandID uuid.UUID, limit, window int32) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 
-		// GetBrandForUpdate locks the brand row to serialize modifications and avoid races.
-		// Propagating changes via CONFIGURE_BRAND_FCAP transaction outbox ensures atomic delivery of brand frequency constraints to the Redis cache.
+		// Pessimistic lock to serialize brand modifications.
 		brand, err := q.GetBrandForUpdate(ctx, ads.ToUUID(brandID))
 		if err != nil {
 			return fmt.Errorf("brand not found: %w", err)

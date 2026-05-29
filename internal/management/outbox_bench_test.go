@@ -39,9 +39,7 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 	const eventCount = 100
 
 	// 1. Measure standard processing duration with real Redis (localhost)
-	t.Log("--------------------------------------------------------------------------------")
 	t.Log("MEASURING TRANSACTION TIMES: Standard Outbox vs Decoupled Outbox")
-	t.Log("--------------------------------------------------------------------------------")
 
 	// Seed events
 	seedEvents(t, queries, eventCount)
@@ -58,9 +56,7 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 	// 2. Simulate Connection Pool Starvation & Row Lock Contention under Latency
 	// If the OutboxWorker gets stuck on a slow Redis call (e.g. 50ms latency),
 	// let's measure how long another worker or the API pool is blocked on the locked rows.
-	t.Log("\n--------------------------------------------------------------------------------")
-	t.Log("SIMULATING LOCK CONTENTION & CONNECTION STARVATION UNDER REDIS LATENCY (50ms)")
-	t.Log("--------------------------------------------------------------------------------")
+	t.Log("\nSIMULATING LOCK CONTENTION & CONNECTION STARVATION UNDER REDIS LATENCY (50ms)")
 
 	seedEvents(t, queries, 10)
 

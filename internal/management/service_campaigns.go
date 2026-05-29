@@ -158,8 +158,6 @@ func (s *Service) ListStatusHistory(ctx context.Context, campaignID uuid.UUID, l
 	return res, total, nil
 }
 
-// UpdateCampaignPacing updates campaign's pacing mode in Postgres with pessimistic locking,
-// creates an admin audit log, and registers a UPDATE_CAMPAIGN_PACING outbox event.
 func (s *Service) UpdateCampaignPacing(ctx context.Context, campaignID uuid.UUID, newMode string) (CampaignDTO, error) {
 	var pacing db.PacingModeType
 	switch newMode {
@@ -175,8 +173,7 @@ func (s *Service) UpdateCampaignPacing(ctx context.Context, campaignID uuid.UUID
 	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 
-		// GetCampaignForUpdate locks the campaign row to prevent concurrent pacing/budget updates from overwriting each other.
-		// Emitting the UPDATE_CAMPAIGN_PACING outbox event within the same transaction ensures atomic replication to Redis.
+		// Pessimistic lock to serialize campaign modifications.
 		camp, err := q.GetCampaignForUpdate(ctx, ads.ToUUID(campaignID))
 		if err != nil {
 			return fmt.Errorf("campaign not found: %w", err)
