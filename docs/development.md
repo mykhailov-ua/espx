@@ -7,8 +7,20 @@ Tooling, testing, and maintenance workflow for the sharded ingestion pipeline.
 - Docker & Docker Compose
 - `buf` (for Protobuf generation)
 
-## Makefile Targets
+## Makefile & Taskfile Targets
 
+For modern workflow automation, use the `Taskfile.yml` configuration (executable via `task` globally or `go run github.com/go-task/task/v3/cmd/task@latest`).
+
+### Taskfile Tasks
+| Task | Action |
+| :--- | :--- |
+| `task gen` | Run all codegen: `sqlc generate`, `templ generate`, and `buf generate`. |
+| `task docker-up` | Start infrastructure databases (`db`, 6 Redis shards, `clickhouse`) in detached mode. |
+| `task docker-down` | Stop and teardown all infrastructure containers. |
+| `task check-deps` | Invoke the local database healthcheck shell script. |
+| `task test-full` | Run the complete Go test suite with the race detector enabled (`go test -v -race ./...`). |
+
+### Legacy Makefile Targets
 | Target | Action |
 | :--- | :--- |
 | `make fmt` | Format code via `go fmt`. |
@@ -51,7 +63,7 @@ docker compose up -d
 | **Processor** | 8186 | Async Worker (Metrics/Health) |
 | **Management** | 8188 | Control Plane Gateway |
 | **Auth Server** | 51051 | Internal gRPC Auth Server |
-| **Redis Shards** | 6479-6484 | Sharded Cache Cluster |
+| **Redis Shards** | 6479-6484 | Client-Side Sharded Cache Pool |
 | **PostgreSQL** | 5440 | Transactional Database |
 | **ClickHouse** | 9100, 8223 | Analytical Database |
 | **Prometheus** | 9190 | Metrics Storage (Host Mode) |
@@ -130,12 +142,84 @@ To ensure the primary `/ads` ingestion hot path maintains zero-allocation behavi
 The execution utilizes `go test -bench=BenchmarkAdsPacketHandler -benchmem -count=10` on both baseline (`main` branch) and target PR code. The outputs are compared via `benchstat`:
 1. **Memory Leak Control**: Any output showing `allocs/op > 0` fails the pipeline.
 2. **Memory Bloat Control**: Any output showing `B/op > 0` fails the pipeline.
-3. **CPU Regression Control**: Any time/op metrics demonstrating a latency regression exceeding `12.0%` with statistical significance ($p < 0.05$) fail the pipeline.
+3. **CPU Regression Control**: Any time/op metrics demonstrating a latency regression exceeding `12.0%` with statistical significance (p < 0.05) fail the pipeline.
 
 Upon a violation, the gate script `scripts/perf_gate.go` exits with code `1`, blocking the pull request merge.
 
 ### Local Execution & Testing
-You can emulate the performance gate analysis locally using two benchmark files:
+You can emulate the performance gate analysis locally.
+
+#### Automated Local Task (Recommended)
+You can run the complete performance gate simulation (staging base/PR branches in worktrees, profiling, and executing benchstat/perf_gate analysis) using Taskfile:
 ```bash
+task perf-gate
+```
+
+#### Manual Native Bare-Metal Comparison
+This method isolates the baseline in a separate git worktree to avoid dirtying your current branch or stash state:
+```bash
+# 1. Profile your current changes (PR state)
+go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > pr_bench.txt
+
+# 2. Check out the baseline (main branch) in an isolated worktree directory
+git worktree prune || true
+rm -rf ../baseline || true
+git worktree add ../baseline main
+
+# 3. Profile the baseline state
+cd ../baseline
+go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > ../ad-event-processor/baseline_bench.txt
+
+# 4. Return to your working directory and execute comparison
+cd ../ad-event-processor
 go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt
 ```
+
+#### Local GitHub Actions Runner Emulation
+To run the automated workflow using `act`:
+```bash
+act -W .github/workflows/perf_gate.yml
+```
+
+## Developer Admin CLI Utility (`cmd/admin`)
+
+The `admin` CLI utility provides command-line control over sharded Redis caches and PostgreSQL entities for local debugging and environment validation.
+
+### Compilation
+Build the binary locally:
+```bash
+go build -o bin/admin ./cmd/admin
+```
+
+### Supported Commands
+
+#### 1. Database Seeding (`admin db seed`)
+Atomically populates the PostgreSQL database inside a single transaction with realistic test data:
+- 100 Customers (pre-configured with high balances and overdraft settings).
+- 100 Users (mapped to customers, with pre-computed Argon2id password hashes to speed up execution).
+- 10 Advertiser Brands.
+- 1000 Campaigns (fully modulated with diverse pacing modes, country targets, frequency caps, and daily budgets).
+
+```bash
+./bin/admin db seed
+```
+
+#### 2. PASETO Token Generation (`admin user create-token`)
+Generates cryptographically signed PASETO tokens in memory using `TokenSymmetricKey` for rapid Curl/API testing:
+```bash
+./bin/admin user create-token --email user1@test.com [--auto-create]
+```
+
+#### 3. Sharded Budget Reset (`admin budget reset`)
+Calculates consistent JumpHash sharding on a `CampaignID` to locate the assigned Redis node, clears edge budget buffers/sync accumulators, and optionally resets campaign `current_spend` to 0 in PostgreSQL:
+```bash
+./bin/admin budget reset --campaign-id <uuid> [--reset-db-spend]
+```
+
+#### 4. CRUD Entities Management
+Full command suites exist to inspect and mutate relational entities:
+- **Campaigns**: `admin campaign [list|get|create|delete]`
+- **Customers**: `admin customer [list|get|create|update|delete]`
+- **Blacklist**: `admin blacklist [list|add|delete]`
+- **Users**: `admin user [list|get|create|update|delete]`
+

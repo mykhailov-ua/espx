@@ -4,23 +4,24 @@ Overview of the distributed real-time ad event ingestion pipeline, control plane
 
 ## System Topology
 
-The architecture is structured into five distinct operational layers communicating over standardized protocols:
+The architecture is structured into six distinct operational layers communicating over standardized protocols:
 
 1. **Ingress Layer (Nginx)**
    - Primary HTTP/3 reverse proxy terminating incoming client traffic.
    - Routes administrative REST API calls to the Control Plane (`/admin/*`) and high-frequency ad impression/click events to the Ingestion Plane (`/track/*`).
 
-2. **Control Plane (Management & Authentication)**
+2. **Control Plane (Management, Authentication, & Tooling)**
    - **Management Gateway (`:8188`)**: Serves external REST endpoints, managing RBAC, DTO serialization, and financial ledger idempotency.
    - **Auth Service (`:51051`)**: Internal gRPC microservice handling `Argon2id` password hashing and issuing cryptographic PASETO tokens.
+   - **Admin CLI Utility (`cmd/admin`)**: High-performance developer utility for offline seeding, consistent JumpHash-routed budget resets, and database CRUD.
 
 3. **Ingestion Plane (Tracker Replicas)**
    - Stateless Go instances (`:8181-8184`) running in `network_mode: host` to bypass bridge network layers, using event-driven `gnet/v2` engines with physical CPU thread-to-core pinning (`runtime.LockOSThread()`) to optimize connection processing.
    - Employs `sync.Pool` object recycling (enforcing heap-allocated slice pointer targets to prevent stack-to-heap escapes) to maintain zero heap allocations on `/track`, `/health`, and `/metrics` ingestion paths.
    - Eliminates allocations on the hot path by utilizing pre-generated domain UUID strings from a registry cache, representing budgets as 64-bit integers scaled by 1,000,000 (10^6), and adopting raw `bytes` schema definitions in protobuf pipelines to allow zero-copy unmarshaling.
 
-4. **Edge Caching Layer (Redis Shard Cluster)**
-   - 6-node Redis cluster sharded via consistent JumpHash indexing.
+4. **Edge Caching Layer (Client-Side Sharded Redis Pool)**
+   - 6 independent Redis instances sharded client-side via consistent JumpHash indexing.
    - Executes atomic Lua scripts for budget verification, deduplication, and IP blacklists, while buffering valid events as serialized binary Protobuf `AdStreamEvent` payloads in Redis Streams (`ad:events:stream`).
 
 5. **Asynchronous Settlement & Storage**
@@ -66,7 +67,7 @@ The architecture is structured into five distinct operational layers communicati
 ### Storage Engines
 * **PostgreSQL 16**: Relational master database storing customer accounts, financial ledgers (`balance_ledger`), RBAC permissions, and campaign metadata. Database access is managed via type-safe `sqlc` queries with daily table partitioning.
 * **ClickHouse**: Columnar analytical store designed for click/impression telemetry, aggregation queries, and anti-fraud anomaly detection.
-* **Redis Cluster**: Sharded 6-node in-memory storage layer providing edge validation for active budgets, token revocation flags, IP blacklists, and asynchronous streaming queues.
+* **Sharded Redis Pool**: 6 independent in-memory storage nodes sharded client-side, providing edge validation for active budgets, token revocation flags, IP blacklists, and asynchronous streaming queues.
 
 ### Scalability Strategy
 * **Horizontal Scaling**: All ingestion trackers, batch processors, and management gateways are stateless and scale horizontally across container nodes.
