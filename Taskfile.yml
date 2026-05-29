@@ -42,3 +42,17 @@ tasks:
     cmds:
       - echo "Running full test suite with race detector..."
       - go test -v -race ./...
+
+  perf-gate:
+    desc: Run performance gate analysis locally against main branch
+    cmds:
+      - echo "Running local performance-gate simulation..."
+      - go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > pr_bench.txt
+      - git worktree prune || true
+      - rm -rf ../baseline-local || true
+      - git worktree add --detach ../baseline-local main
+      - cd ../baseline-local && go test -run=^$ -bench=BenchmarkAdsPacketHandler -benchmem -count=10 ./internal/ads > ../ad-event-processor/baseline_bench.txt
+      - git worktree prune || true
+      - rm -rf ../baseline-local || true
+      - go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt > gate_report.txt
+      - cat gate_report.txt
