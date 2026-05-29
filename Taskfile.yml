@@ -1,0 +1,44 @@
+version: '3'
+
+vars:
+  GO: 'go'
+  PATH_WITH_GO: 'PATH=$PATH:/usr/local/go/bin:$(go env GOPATH)/bin'
+
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+
+  gen:
+    desc: Run sqlc, templ, and protoc code generation
+    cmds:
+      - echo "Running sqlc generate..."
+      - sqlc generate
+      - echo "Running templ generate..."
+      - templ generate
+      - echo "Running protobuf/gRPC generate via buf..."
+      - go run github.com/bufbuild/buf/cmd/buf@latest generate
+
+  docker-up:
+    desc: Start infrastructure containers (PostgreSQL, sharded Redis, ClickHouse) in detached mode
+    cmds:
+      - echo "Starting database infrastructure..."
+      - docker compose up -d db redis-0 redis-1 redis-2 redis-3 redis-4 redis-5 clickhouse
+
+  docker-down:
+    desc: Stop and remove all infrastructure containers
+    cmds:
+      - echo "Stopping infrastructure..."
+      - docker compose down
+
+  check-deps:
+    desc: Run dependency healthcheck script to verify all databases and migrations are functional
+    cmds:
+      - bash ./scripts/check-deps.sh
+
+  test-full:
+    desc: Run all unit and integration tests with the Go race detector enabled
+    cmds:
+      - echo "Running full test suite with race detector..."
+      - go test -v -race ./...

@@ -12,6 +12,17 @@ service AuthService {
   rpc VerifyToken(VerifyTokenRequest) returns (VerifyTokenResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+
+  // API key lifecycle. Raw secret is returned exactly once.
+  rpc CreateAPIKey(CreateAPIKeyRequest) returns (CreateAPIKeyResponse);
+  rpc ListAPIKeys(ListAPIKeysRequest) returns (ListAPIKeysResponse);
+
+  // Self-service password rotation with explicit old-password check (anti-account-takeover).
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse);
+
+  // Email ownership verification flow. Token is short-lived and single-use.
+  rpc RequestEmailVerification(RequestEmailVerificationRequest) returns (RequestEmailVerificationResponse);
+  rpc ConfirmEmailVerification(ConfirmEmailVerificationRequest) returns (ConfirmEmailVerificationResponse);
 }
 
 message RegisterRequest {
@@ -67,3 +78,51 @@ message RevokeTokenRequest {
 }
 
 message RevokeTokenResponse {}
+
+// API Key management (DB schema was already present; these RPCs make it usable)
+message CreateAPIKeyRequest {
+  string name = 1;
+  google.protobuf.Timestamp expires_at = 2; // optional
+}
+
+message CreateAPIKeyResponse {
+  string id = 1;
+  string name = 2;
+  string raw_key = 3;          // ONLY returned once, at creation time. Client must store it.
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message ListAPIKeysRequest {}
+
+message ListAPIKeysResponse {
+  repeated APIKey keys = 1;
+}
+
+message APIKey {
+  string id = 1;
+  string name = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+// Password & email lifecycle
+message ChangePasswordRequest {
+  string old_password = 1;
+  string new_password = 2;
+}
+
+message ChangePasswordResponse {}
+
+message RequestEmailVerificationRequest {}
+
+message RequestEmailVerificationResponse {
+  // In production the token is sent via email by the caller (management gateway).
+  // For internal tests/dev the token is returned here.
+  string verification_token = 1;
+}
+
+message ConfirmEmailVerificationRequest {
+  string verification_token = 1;
+}
+
+message ConfirmEmailVerificationResponse {}
