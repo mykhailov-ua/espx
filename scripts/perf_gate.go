@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 )
 
 type CompareRow struct {
@@ -31,7 +32,7 @@ func main() {
 	baselineFile := os.Args[1]
 	prFile := os.Args[2]
 
-	fmt.Printf("--- PERFORMANCE GATE ANALYSIS ---\n")
+	fmt.Printf("PERFORMANCE GATE ANALYSIS\n")
 	fmt.Printf("Baseline File: %s\n", baselineFile)
 	fmt.Printf("PR File:       %s\n\n", prFile)
 
@@ -50,7 +51,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("\n--- COMPARISON REPORT ---")
+	fmt.Println("\nCOMPARISON REPORT")
 	fmt.Println(comparisonTable)
 
 	if regressionDetected {
@@ -217,18 +218,19 @@ func parseCSVOutput(csvContent string) (bool, string) {
 		}
 	}
 
-	// Format rows to Markdown Table
+	// Format rows to aligned CLI Columns
 	var tableBuilder strings.Builder
-	tableBuilder.WriteString("| Metric / Benchmark | Baseline (old) | PR (new) | Delta % | p-value | Status |\n")
-	tableBuilder.WriteString("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+	w := tabwriter.NewWriter(&tableBuilder, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "BENCHMARK\tMETRIC\tBASELINE\tPR\tDELTA\tP-VALUE\tSTATUS")
 
 	for _, r := range rows {
 		pValDisplay := r.PValue
 		if pValDisplay == "" {
 			pValDisplay = "-"
 		}
-		tableBuilder.WriteString(fmt.Sprintf("| %s (%s) | %s | %s | %s | %s | %s |\n", r.Benchmark, r.Metric, r.OldVal, r.NewVal, r.Delta, pValDisplay, r.Status))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", r.Benchmark, r.Metric, r.OldVal, r.NewVal, r.Delta, pValDisplay, r.Status)
 	}
+	w.Flush()
 
 	return regression, tableBuilder.String()
 }
