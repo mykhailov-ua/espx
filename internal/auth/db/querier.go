@@ -15,16 +15,21 @@ type Querier interface {
 	BlockSessionByRefreshToken(ctx context.Context, refreshToken string) error
 	BlockUser(ctx context.Context, email string) error
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (CreateAPIKeyRow, error)
+	CreateAuthAuditLog(ctx context.Context, arg CreateAuthAuditLogParams) (CreateAuthAuditLogRow, error)
+	CreatePasswordHistoryEntry(ctx context.Context, arg CreatePasswordHistoryEntryParams) error
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (CreateUserRow, error)
 	DeleteExpiredOrBlockedSessions(ctx context.Context) (int64, error)
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKeyByHashRow, error)
+	GetPasswordHistory(ctx context.Context, arg GetPasswordHistoryParams) ([]string, error)
 	GetSession(ctx context.Context, id pgtype.UUID) (Session, error)
 	GetSessionByRefreshToken(ctx context.Context, refreshToken string) (Session, error)
 	GetSessionByRefreshTokenForUpdate(ctx context.Context, refreshToken string) (Session, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
+	ListAuthAuditLogsByUser(ctx context.Context, arg ListAuthAuditLogsByUserParams) ([]AuthAuditLog, error)
 	ListUserAPIKeys(ctx context.Context, userID pgtype.UUID) ([]ListUserAPIKeysRow, error)
+	SetEmailVerified(ctx context.Context, id pgtype.UUID) error
 	UpdatePassword(ctx context.Context, arg UpdatePasswordParams) error
 }
 

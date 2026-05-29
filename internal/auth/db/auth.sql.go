@@ -81,6 +81,59 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Cre
 	return i, err
 }
 
+const createAuthAuditLog = `-- name: CreateAuthAuditLog :one
+INSERT INTO auth_audit_log (user_id, action, target_type, target_id, client_ip, user_agent, changes, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, created_at
+`
+
+type CreateAuthAuditLogParams struct {
+	UserID     pgtype.UUID `json:"user_id"`
+	Action     string      `json:"action"`
+	TargetType pgtype.Text `json:"target_type"`
+	TargetID   pgtype.Text `json:"target_id"`
+	ClientIp   pgtype.Text `json:"client_ip"`
+	UserAgent  pgtype.Text `json:"user_agent"`
+	Changes    []byte      `json:"changes"`
+	Metadata   []byte      `json:"metadata"`
+}
+
+type CreateAuthAuditLogRow struct {
+	ID        int64              `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) CreateAuthAuditLog(ctx context.Context, arg CreateAuthAuditLogParams) (CreateAuthAuditLogRow, error) {
+	row := q.db.QueryRow(ctx, createAuthAuditLog,
+		arg.UserID,
+		arg.Action,
+		arg.TargetType,
+		arg.TargetID,
+		arg.ClientIp,
+		arg.UserAgent,
+		arg.Changes,
+		arg.Metadata,
+	)
+	var i CreateAuthAuditLogRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
+	return i, err
+}
+
+const createPasswordHistoryEntry = `-- name: CreatePasswordHistoryEntry :exec
+INSERT INTO password_history (user_id, password_hash)
+VALUES ($1, $2)
+`
+
+type CreatePasswordHistoryEntryParams struct {
+	UserID       pgtype.UUID `json:"user_id"`
+	PasswordHash string      `json:"password_hash"`
+}
+
+func (q *Queries) CreatePasswordHistoryEntry(ctx context.Context, arg CreatePasswordHistoryEntryParams) error {
+	_, err := q.db.Exec(ctx, createPasswordHistoryEntry, arg.UserID, arg.PasswordHash)
+	return err
+}
+
 const createSession = `-- name: CreateSession :one
 INSERT INTO sessions (id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -203,6 +256,39 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 	return i, err
 }
 
+const getPasswordHistory = `-- name: GetPasswordHistory :many
+SELECT password_hash
+FROM password_history
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT $2
+`
+
+type GetPasswordHistoryParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Limit  int32       `json:"limit"`
+}
+
+func (q *Queries) GetPasswordHistory(ctx context.Context, arg GetPasswordHistoryParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, getPasswordHistory, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var password_hash string
+		if err := rows.Scan(&password_hash); err != nil {
+			return nil, err
+		}
+		items = append(items, password_hash)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getSession = `-- name: GetSession :one
 SELECT id, user_id, refresh_token, user_agent, client_ip, is_blocked, expires_at, created_at
 FROM sessions
@@ -271,7 +357,7 @@ func (q *Queries) GetSessionByRefreshTokenForUpdate(ctx context.Context, refresh
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, role, customer_id, created_at, updated_at, is_blocked
+SELECT id, email, password_hash, role, customer_id, created_at, updated_at, is_blocked, email_verified
 FROM users
 WHERE email = $1
 `
@@ -288,12 +374,13 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IsBlocked,
+		&i.EmailVerified,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, role, customer_id, created_at, updated_at, is_blocked
+SELECT id, email, password_hash, role, customer_id, created_at, updated_at, is_blocked, email_verified
 FROM users
 WHERE id = $1
 `
@@ -310,8 +397,54 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IsBlocked,
+		&i.EmailVerified,
 	)
 	return i, err
+}
+
+const listAuthAuditLogsByUser = `-- name: ListAuthAuditLogsByUser :many
+SELECT id, user_id, action, target_type, target_id, client_ip, user_agent, changes, metadata, created_at
+FROM auth_audit_log
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListAuthAuditLogsByUserParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+}
+
+func (q *Queries) ListAuthAuditLogsByUser(ctx context.Context, arg ListAuthAuditLogsByUserParams) ([]AuthAuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuthAuditLogsByUser, arg.UserID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuthAuditLog
+	for rows.Next() {
+		var i AuthAuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.ClientIp,
+			&i.UserAgent,
+			&i.Changes,
+			&i.Metadata,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listUserAPIKeys = `-- name: ListUserAPIKeys :many
@@ -350,6 +483,17 @@ func (q *Queries) ListUserAPIKeys(ctx context.Context, userID pgtype.UUID) ([]Li
 		return nil, err
 	}
 	return items, nil
+}
+
+const setEmailVerified = `-- name: SetEmailVerified :exec
+UPDATE users
+SET email_verified = TRUE, updated_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) SetEmailVerified(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, setEmailVerified, id)
+	return err
 }
 
 const updatePassword = `-- name: UpdatePassword :exec

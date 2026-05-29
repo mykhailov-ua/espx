@@ -17,6 +17,26 @@ type ApiKey struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type AuthAuditLog struct {
+	ID         int64              `json:"id"`
+	UserID     pgtype.UUID        `json:"user_id"`
+	Action     string             `json:"action"`
+	TargetType pgtype.Text        `json:"target_type"`
+	TargetID   pgtype.Text        `json:"target_id"`
+	ClientIp   pgtype.Text        `json:"client_ip"`
+	UserAgent  pgtype.Text        `json:"user_agent"`
+	Changes    []byte             `json:"changes"`
+	Metadata   []byte             `json:"metadata"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type PasswordHistory struct {
+	ID           int64              `json:"id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	PasswordHash string             `json:"password_hash"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Session struct {
 	ID           pgtype.UUID        `json:"id"`
 	UserID       pgtype.UUID        `json:"user_id"`
@@ -29,12 +49,13 @@ type Session struct {
 }
 
 type User struct {
-	ID           pgtype.UUID        `json:"id"`
-	Email        string             `json:"email"`
-	PasswordHash string             `json:"password_hash"`
-	Role         string             `json:"role"`
-	CustomerID   pgtype.UUID        `json:"customer_id"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	IsBlocked    bool               `json:"is_blocked"`
+	ID            pgtype.UUID        `json:"id"`
+	Email         string             `json:"email"`
+	PasswordHash  string             `json:"password_hash"`
+	Role          string             `json:"role"`
+	CustomerID    pgtype.UUID        `json:"customer_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	IsBlocked     bool               `json:"is_blocked"`
+	EmailVerified bool               `json:"email_verified"`
 }
