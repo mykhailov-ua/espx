@@ -1,6 +1,6 @@
 global:
-  scrape_interval: 5s
-  evaluation_interval: 5s
+  scrape_interval: 5s      # tracker hot-path counters are updated at ~1 ms granularity; 5s gives adequate resolution
+  evaluation_interval: 5s  # alert rule evaluation period; match scrape interval to prevent stale data in conditions
 
 rule_files:
   - "prometheus.rules.yml"
@@ -12,9 +12,9 @@ alerting:
             - '127.0.0.1:9093'
 
 scrape_configs:
-  - job_name: 'tracker'
+  - job_name: 'tracker'      # four tracker replicas on consecutive ports (8181-8184) sharing the same metrics path
     static_configs:
       - targets: ['127.0.0.1:8181', '127.0.0.1:8182', '127.0.0.1:8183', '127.0.0.1:8184']
-  - job_name: 'processor'
+  - job_name: 'processor'    # single processor instance; higher cardinality metrics (per-shard stream lag)
     static_configs:
       - targets: ['127.0.0.1:8186']

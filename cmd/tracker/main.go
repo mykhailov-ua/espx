@@ -79,7 +79,7 @@ func main() {
 	registry.StartWatch(ctx, rdbs[0], channel)
 
 	campaignRepo := ads.NewCampaignRepo(queries)
-	sharder := ads.NewJumpHashSharder(len(rdbs))
+	sharder := ads.NewStaticSlotSharder(len(rdbs))
 
 	var geoProvider ads.GeoProvider
 	geoProvider, err = ads.NewMaxMindProvider("deploy/geoip/GeoLite2-Country.mmdb")
@@ -123,6 +123,7 @@ func main() {
 			gnet.WithMulticore(true),
 			gnet.WithReusePort(true),
 			gnet.WithTCPNoDelay(gnet.TCPNoDelay),
+			gnet.WithLockOSThread(true),
 		)
 		if err != nil {
 			slog.Error("gnet server failed", "error", err)

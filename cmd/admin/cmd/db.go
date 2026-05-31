@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	adsdb "github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
 	authdb "github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
-	adsdb "github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/spf13/cobra"
 )
 
@@ -29,9 +29,6 @@ var seedCmd = &cobra.Command{
 		}
 		defer pool.Close()
 
-		// Hashing passwords via Argon2id is highly CPU-intensive by design.
-		// Pre-computing the hash once outside the seed loop eliminates a massive
-		// 5-10s CPU bottleneck, allowing 100 users to be seeded under 1s.
 		hasher, err := auth.NewPasswordHasher(
 			uint32(cfg.Argon2Memory),
 			uint32(cfg.Argon2Iterations),
@@ -68,7 +65,7 @@ var seedCmd = &cobra.Command{
 			_, err = adsQueries.CreateCustomer(ctx, adsdb.CreateCustomerParams{
 				ID:       pgtype.UUID{Bytes: cID, Valid: true},
 				Name:     fmt.Sprintf("Advertiser Customer %d", i),
-				Balance:  100_000_000_000, // 100K dollars/cents or micro-units
+				Balance:  100_000_000_000,
 				Currency: "USD",
 			})
 			if err != nil {
@@ -76,8 +73,6 @@ var seedCmd = &cobra.Command{
 			}
 		}
 
-		// Overdraft limits are set for a subset of seeded customers to support
-		// testing of billing limits and balance checking.
 		for i := 0; i < 20; i++ {
 			_, err = adsQueries.UpdateCustomerOverdraft(ctx, adsdb.UpdateCustomerOverdraftParams{
 				AllowedOverdraft: 5_000_000_000,
@@ -136,11 +131,10 @@ var seedCmd = &cobra.Command{
 				brandFcapKey = fmt.Sprintf("brand:fcap:%s", brandIDs[custIdx].String())
 			}
 
-			// Generate varying allowed country subsets to model multi-geo campaigns.
 			targetCountries := countries[0 : 1+(i%len(countries))]
 
 			pacing := pacingModes[i%len(pacingModes)]
-			budgetLimit := int64(10_000_000_000 + (i%5)*5_000_000_000) // 10k to 30k dollars/micro-units
+			budgetLimit := int64(10_000_000_000 + (i%5)*5_000_000_000)
 			dailyBudget := int64(1_000_000_000 + (i%3)*1_000_000_000)
 
 			_, err = adsQueries.CreateCampaign(ctx, adsdb.CreateCampaignParams{
@@ -175,7 +169,6 @@ var seedCmd = &cobra.Command{
 	},
 }
 
-// Campaigns CRUD Command Group
 var campaignCmd = &cobra.Command{
 	Use:   "campaign",
 	Short: "CRUD management for campaigns",
@@ -327,7 +320,6 @@ var deleteCampaignCmd = &cobra.Command{
 	},
 }
 
-// Customer CRUD Command Group
 var customerCmd = &cobra.Command{
 	Use:   "customer",
 	Short: "CRUD management for customers",
@@ -472,7 +464,6 @@ var updateCustomerCmd = &cobra.Command{
 		}
 		defer pool.Close()
 
-		// Update manually
 		if balance > 0 {
 			_, err = pool.Exec(ctx, "UPDATE customers SET balance = $1, updated_at = NOW() WHERE id = $2", balance, pgtype.UUID{Bytes: cID, Valid: true})
 			if err != nil {
@@ -523,7 +514,6 @@ var deleteCustomerCmd = &cobra.Command{
 	},
 }
 
-// Blacklist IP Command Group
 var blacklistCmd = &cobra.Command{
 	Use:   "blacklist",
 	Short: "Manage blocked IP addresses",

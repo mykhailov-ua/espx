@@ -1,11 +1,11 @@
 global:
-  resolve_timeout: 5m
+  resolve_timeout: 5m  # time before a firing alert is declared resolved if no further samples arrive
 
 route:
   group_by: ['alertname']
-  group_wait: 10s
-  group_interval: 10s
-  repeat_interval: 1h
+  group_wait: 10s       # delay before sending the first notification in a new group; allows alert aggregation
+  group_interval: 10s   # minimum interval between notifications for the same group
+  repeat_interval: 1h   # minimum time before resending a notification for an alert still firing
   receiver: 'telegram-proxy'
 
 receivers:

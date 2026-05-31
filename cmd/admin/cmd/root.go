@@ -17,9 +17,9 @@ import (
 )
 
 var (
-	envPath      string
-	cfg          *config.Config
-	logger       *slog.Logger
+	envPath string
+	cfg     *config.Config
+	logger  *slog.Logger
 )
 
 var rootCmd = &cobra.Command{
@@ -52,8 +52,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&envPath, "env-path", ".env", "path to .env configuration file")
 }
 
-// loadEnvFile parses local .env parameters and inserts them into os.Environ
-// if they are not already set, preserving container environment parity.
 func loadEnvFile(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -87,14 +85,10 @@ func loadEnvFile(path string) error {
 	return scanner.Err()
 }
 
-// getDB initializes a Postgres connection pool on-demand to prevent
-// socket allocations on commands that do not query database nodes.
 func getDB(ctx context.Context) (*pgxpool.Pool, error) {
 	return database.Connect(ctx, string(cfg.DBDSN), 5, 1)
 }
 
-// getRedisShards establishes connection to all sharded Redis clients,
-// validating node health to prevent routing errors under network partitions.
 func getRedisShards(ctx context.Context) ([]redis.UniversalClient, *ads.JumpHashSharder, error) {
 	var clients []redis.UniversalClient
 	for _, addr := range cfg.RedisAddrs {

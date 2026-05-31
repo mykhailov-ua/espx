@@ -38,8 +38,7 @@ var createTokenCmd = &cobra.Command{
 		if err != nil {
 			if autoCreate {
 				fmt.Printf("User %s not found. Auto-creating...\n", email)
-				// NewPasswordHasher uses configured memory settings to execute
-				// Argon2id key derivation securely during testing.
+
 				hasher, err := auth.NewPasswordHasher(
 					uint32(cfg.Argon2Memory),
 					uint32(cfg.Argon2Iterations),
@@ -245,8 +244,6 @@ var updateUserCmd = &cobra.Command{
 		}
 		defer pool.Close()
 
-		// Dynamically constructs the update attributes to prevent overwriting
-		// unspecified fields with default values.
 		var queryParts []string
 		var queryArgs []any
 		argIdx := 1

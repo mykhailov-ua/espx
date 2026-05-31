@@ -34,7 +34,6 @@ var budgetResetCmd = &cobra.Command{
 		}
 		defer pool.Close()
 
-		// Verify database campaign existence before attempting any Redis cache mutations.
 		queries := adsdb.New(pool)
 		camp, err := queries.GetCampaign(ctx, pgtype.UUID{Bytes: campaignID, Valid: true})
 		if err != nil {
@@ -53,8 +52,6 @@ var budgetResetCmd = &cobra.Command{
 			}
 		}()
 
-		// Map the target Campaign ID to its specific Redis partition index
-		// using consistent Jump Hash layout to locate the exact active budget.
 		shardIdx := sharder.GetShard(campaignID)
 		rdb := redisClients[shardIdx]
 

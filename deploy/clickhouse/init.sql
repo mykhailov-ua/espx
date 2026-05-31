@@ -1,3 +1,17 @@
+-- deploy/clickhouse/init.sql: ClickHouse schema initialisation for the ad-event pipeline.
+-- All tables use ReplacingMergeTree(created_at) to deduplicate re-ingested events
+-- based on the ORDER BY key; deduplication is eventually consistent and is triggered
+-- by OPTIMIZE TABLE or background merges.
+--
+-- PARTITION BY toYYYYMM(created_at): monthly partitions enable efficient bulk-drop
+-- for TTL enforcement and fast range scans in the reconciliation queries.
+-- ORDER BY (campaign_id, created_at, click_id): optimises aggregation queries grouped
+-- by campaign (reconciliation, reporting) while keeping click_id as a trailing sort
+-- key for deduplication within the same campaign+timestamp bucket.
+--
+-- TTL: impressions/clicks/conversions are retained for 180 days; fraud_events for 90 days.
+-- The TTL column must match or extend the replication lag window to avoid premature deletion.
+
 CREATE DATABASE IF NOT EXISTS ad_event_processor;
 USE ad_event_processor;
 

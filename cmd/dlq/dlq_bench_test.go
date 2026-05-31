@@ -50,7 +50,6 @@ func TestDLQBackupMetrics(t *testing.T) {
 	jsonlPath := filepath.Join(tempDir, "backup.jsonl")
 	binPath := filepath.Join(tempDir, "backup.bin")
 
-	// 1. Benchmark JSONL Write
 	t.Log("MEASURING WRITE SPEED & FILE SIZE")
 
 	startJSONWrite := time.Now()
@@ -86,7 +85,6 @@ func TestDLQBackupMetrics(t *testing.T) {
 	jsonFile.Close()
 	durJSONWrite := time.Since(startJSONWrite)
 
-	// 2. Benchmark Binary Protobuf Write
 	startBinWrite := time.Now()
 	binFile, err := os.Create(binPath)
 	if err != nil {
@@ -109,7 +107,6 @@ func TestDLQBackupMetrics(t *testing.T) {
 	binFile.Close()
 	durBinWrite := time.Since(startBinWrite)
 
-	// Fetch File Sizes
 	jsonInfo, _ := os.Stat(jsonlPath)
 	binInfo, _ := os.Stat(binPath)
 
@@ -118,10 +115,8 @@ func TestDLQBackupMetrics(t *testing.T) {
 	t.Logf("-> Size Reduction: %.1f%%", float64(jsonInfo.Size()-binInfo.Size())/float64(jsonInfo.Size())*100)
 	t.Logf("-> Write Speedup: %.1fx", float64(durJSONWrite.Nanoseconds())/float64(durBinWrite.Nanoseconds()))
 
-	// 3. Benchmark Read & Decode
 	t.Log("\nMEASURING READ & DECODE (DESERIALIZATION) SPEED")
 
-	// Read JSONL
 	startJSONRead := time.Now()
 	jsonReadVal, err := os.Open(jsonlPath)
 	if err != nil {
@@ -142,7 +137,6 @@ func TestDLQBackupMetrics(t *testing.T) {
 	jsonReadVal.Close()
 	durJSONRead := time.Since(startJSONRead)
 
-	// Read Binary Protobuf
 	startBinRead := time.Now()
 	binReadVal, err := os.Open(binPath)
 	if err != nil {

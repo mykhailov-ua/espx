@@ -100,9 +100,9 @@ func archiveDLQ(ctx context.Context, rdb *redis.Client, stream, destFile string,
 			pbDLQ := &pb.AdDLQEvent{}
 
 			if rawBytesStr, ok := msg.Values["d"].(string); ok {
-				// Protobuf format
+
 				if err := proto.Unmarshal(ads.UnsafeBytes(rawBytesStr), pbDLQ); err != nil {
-					// Fallback to stream event format directly
+
 					pbStream := &pb.AdStreamEvent{}
 					if err := proto.Unmarshal(ads.UnsafeBytes(rawBytesStr), pbStream); err == nil {
 						pbDLQ.OriginalEvent = pbStream
@@ -110,7 +110,7 @@ func archiveDLQ(ctx context.Context, rdb *redis.Client, stream, destFile string,
 						pbDLQ.OriginalId = ads.UnsafeBytes(msg.ID)
 						pbDLQ.FailedAtUnix = time.Now().Unix()
 					} else {
-						// Create raw dummy event
+
 						pbDLQ.OriginalEvent = &pb.AdStreamEvent{
 							Payload: ads.UnsafeBytes(rawBytesStr),
 						}
@@ -120,7 +120,7 @@ func archiveDLQ(ctx context.Context, rdb *redis.Client, stream, destFile string,
 					}
 				}
 			} else {
-				// Legacy flat-map format. Map fields to pb.AdDLQEvent
+
 				pbStream := &pb.AdStreamEvent{}
 				if v, ok := msg.Values["click_id"].(string); ok {
 					pbStream.ClickId = ads.UnsafeBytes(v)
@@ -177,8 +177,6 @@ func archiveDLQ(ctx context.Context, rdb *redis.Client, stream, destFile string,
 				return fmt.Errorf("failed to marshal message %s: %w", msg.ID, err)
 			}
 
-			// Store event records sequentially using a 4-byte Big-Endian unsigned integer prefix indicating the byte size.
-			// This enables streaming decompression and framing of individual message frames without high heap-allocation cost.
 			var lengthBuf [4]byte
 			binary.BigEndian.PutUint32(lengthBuf[:], uint32(len(data)))
 			if _, err := file.Write(lengthBuf[:]); err != nil {
@@ -232,7 +230,7 @@ func requeueDLQ(ctx context.Context, rdb *redis.Client, dlqStream, targetStream 
 		for _, msg := range msgs[0].Messages {
 			values := make(map[string]interface{})
 			if rawBytesStr, ok := msg.Values["d"].(string); ok {
-				// Protobuf format
+
 				pbDLQ := &pb.AdDLQEvent{}
 				if err := proto.Unmarshal(ads.UnsafeBytes(rawBytesStr), pbDLQ); err == nil && pbDLQ.OriginalEvent != nil {
 					data, err := proto.Marshal(pbDLQ.OriginalEvent)
@@ -245,7 +243,7 @@ func requeueDLQ(ctx context.Context, rdb *redis.Client, dlqStream, targetStream 
 					log.Printf("Failed to unmarshal Protobuf DLQ message %s: %v", msg.ID, err)
 				}
 			} else {
-				// Legacy flat-map format
+
 				for k, v := range msg.Values {
 					if k != "error" && k != "original_id" && k != "failed_at" && k != "service" && k != "worker_id" && k != "retry_count" {
 						values[k] = v
@@ -379,7 +377,7 @@ func inspectStream(ctx context.Context, rdb *redis.Client, stream string, batchS
 			fmt.Printf("\nMessage ID: %s\n", msg.ID)
 
 			if rawBytesStr, ok := msg.Values["d"].(string); ok {
-				// Try to unmarshal as DLQ event first
+
 				pbDLQ := &pb.AdDLQEvent{}
 				if err := proto.Unmarshal(ads.UnsafeBytes(rawBytesStr), pbDLQ); err == nil && pbDLQ.OriginalEvent != nil {
 					fmt.Println("Format: Protobuf (AdDLQEvent)")
@@ -415,7 +413,7 @@ func inspectStream(ctx context.Context, rdb *redis.Client, stream string, batchS
 					prettyJSON, _ := json.MarshalIndent(m, "", "  ")
 					fmt.Println(string(prettyJSON))
 				} else {
-					// Try to unmarshal as Stream event
+
 					pbStream := &pb.AdStreamEvent{}
 					if err := proto.Unmarshal(ads.UnsafeBytes(rawBytesStr), pbStream); err == nil {
 						fmt.Println("Format: Protobuf (AdStreamEvent)")
