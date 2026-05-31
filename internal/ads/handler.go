@@ -1,8 +1,21 @@
+// Package ads implements the tracker HTTP layer responsible for receiving, validating,
+// and routing ad-event signals (impressions, clicks, conversions) into the Redis Stream
+// ingestion pipeline. Two server backends co-exist: a standard net/http mux (NewRouter)
+// used by the test harness and the management plane, and a lock-free gnet event-loop
+// handler (AdsPacketHandler) used in production. The gnet path bypasses the Go HTTP
+// server entirely — inbound TCP data is parsed with a zero-alloc hand-written HTTP/1.1
+// parser, event state is stored in connection-scoped connContext structs attached to
+// each gnet.Conn, and responses are written as pre-built byte literals or assembled
+// in-place into per-connection slices to avoid the heap pressure of http.ResponseWriter.
+//
+// All allocation-heavy objects (pb.AdEvent, pb.TrackResponse, TrackRequest, fraud value
+// slices, response byte buffers) are managed via sync.Pool with double-indirection
+// pointer pattern (*[]byte, *[]any) to prevent per-call allocations on the hot path.
+// See docs/architecture.md §Tracker and docs/development.md §Pool conventions.
 package ads
 
 import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
-	// "github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 )
 
 import (
@@ -15,7 +28,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/pprof"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,10 +78,29 @@ var (
 		},
 	}
 	statusStrings          [600]string
-	maxPoolObjectSize      = 64 * 1024 // 64KB
+	maxPoolObjectSize      = 64 * 1024
 	contentTypeProtoHeader = []string{"application/x-protobuf"}
 	contentTypeJsonHeader  = []string{"application/json"}
 )
+
+// connContext holds per-connection working memory for the gnet event-loop path.
+// By embedding all intermediate buffers and protobuf structs in this struct and
+// attaching it to gnet.Conn via SetContext, successive requests on the same keep-alive
+// connection reuse the same allocations with no GC pressure. Fields prefixed with 'w'
+// are bufWrapper instances pooled from bufPool; they serve as staging areas for UUID
+// and timestamp string construction without escaping to the heap.
+type connContext struct {
+	pbReq      pb.AdEvent
+	reqJSON    TrackRequest
+	evt        domain.Event
+	valSlice   []any
+	resp       pb.TrackResponse
+	bufSlice   []byte
+	wReqID     bufWrapper
+	wCamp      bufWrapper
+	wTime      bufWrapper
+	bufMetrics bytes.Buffer
+}
 
 func init() {
 	for i := 0; i < 600; i++ {
@@ -117,10 +148,19 @@ func putTrackResponse(resp *pb.TrackResponse) {
 	trackResponsePool.Put(resp)
 }
 
+// Pinger abstracts the health-check surface of a connection pool or client.
+// Implemented by *pgxpool.Pool and redis.UniversalClient; separated to allow
+// testcontainers-based integration tests to substitute lightweight fakes.
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
+// NewRouter constructs the standard net/http ServeMux used by the test harness and
+// management tooling. The /track handler path allocates per-request objects from
+// sync.Pool and calls the same FilterEngine pipeline as the gnet path, but uses
+// io.Copy + bufferPool instead of zero-copy Peek because net/http does not expose
+// the raw TCP ring buffer. Status counter pre-allocation (600-element fixed array)
+// eliminates the WithLabelValues allocation on every response write.
 func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngine *FilterEngine, pool Pinger, rdbs []redis.UniversalClient, sharder Sharder, fraudStream string) http.Handler {
 	mux := http.NewServeMux()
 
@@ -402,8 +442,6 @@ func NewRouter(cfg *config.Config, registry domain.CampaignRegistry, filterEngin
 						slog.Error("failed to write to fraud stream", "error", rdbErr, "request_id", id)
 					}
 
-					// Silent drop is enforced to prevent adversarial actors from discovering anti-fraud detection rules.
-					// Fraud events are acknowledged with HTTP 202 status at the tracker layer while being logged asynchronously.
 				} else {
 					domain.EventPool.Put(evt)
 					slog.Error("filter engine failure", "error", err, "request_id", id)
@@ -539,6 +577,12 @@ var (
 	respBadRequestClose  = []byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 )
 
+// AdsPacketHandler is the production gnet event engine handler. It implements
+// gnet.EventHandler to process raw TCP data without kernel-space copies or Go's
+// http.Server scheduling overhead. Each method executes on a fixed set of OS
+// threads managed by gnet's event loops; no goroutine is spawned per connection.
+// The 600-element trackStatusCounters array is indexed directly by HTTP status code,
+// removing the prometheus label-set lookup from the hot path.
 type AdsPacketHandler struct {
 	*gnet.BuiltinEventEngine
 	eng                   *gnet.Engine
@@ -552,6 +596,10 @@ type AdsPacketHandler struct {
 	trackStatusCounters   [600]prometheus.Counter
 }
 
+// NewAdsPacketHandler pre-allocates all Prometheus observer and counter objects
+// before the server starts accepting traffic, ensuring the WithLabelValues hot path
+// is never hit during request processing. The returned handler must be passed to
+// gnet.Run; it is not safe to call React directly without an active gnet engine.
 func NewAdsPacketHandler(cfg *config.Config, registry domain.CampaignRegistry, filterEngine *FilterEngine, pool Pinger, rdbs []redis.UniversalClient, sharder Sharder, fraudStream string) *AdsPacketHandler {
 	trackDurationObserver := metrics.HttpRequestDuration.WithLabelValues("POST", "/track")
 	var trackStatusCounters [600]prometheus.Counter
@@ -585,9 +633,6 @@ func (h *AdsPacketHandler) Stop(ctx context.Context) error {
 }
 
 func (h *AdsPacketHandler) OnOpen(c gnet.Conn) (out []byte, action gnet.Action) {
-	// Pin the OS thread to the current logical CPU so the event loop executes
-	// entirely on one core, preserving L1/L2 cache affinity for connection state.
-	runtime.LockOSThread()
 	metrics.GnetActiveConnections.Inc()
 	return nil, gnet.None
 }
@@ -597,9 +642,14 @@ func (h *AdsPacketHandler) OnClose(c gnet.Conn, err error) (action gnet.Action) 
 	return gnet.None
 }
 
+// OnTraffic is the gnet reactor callback invoked whenever new data arrives on a
+// connection. It loops over all complete HTTP/1.1 requests present in the inbound
+// ring buffer using Peek (zero-copy read) and Discard (advance read pointer), then
+// delegates to React for each parsed request. Partial requests (errIncompleteRequest)
+// break the loop and wait for the next OnTraffic call once the OS delivers the
+// remaining bytes.
 func (h *AdsPacketHandler) OnTraffic(c gnet.Conn) (action gnet.Action) {
-	// Record event loop saturation: wall-clock work time per reactor dispatch.
-	// Ratio of this counter to elapsed real time gives event-loop utilization.
+
 	loopStart := time.Now()
 	defer func() {
 		metrics.GnetEventLoopWorkDuration.Add(time.Since(loopStart).Seconds())
@@ -641,6 +691,10 @@ func (h *AdsPacketHandler) OnTraffic(c gnet.Conn) (action gnet.Action) {
 	return gnet.None
 }
 
+// parsedHTTPRequest holds byte-slice references into the gnet inbound ring buffer.
+// All fields are slices of the original buffer — no copies are made during header
+// parsing. Callers must not retain these slices past the scope of a single React call
+// because Discard will advance the ring-buffer read pointer, invalidating the memory.
 type parsedHTTPRequest struct {
 	Method        []byte
 	Path          []byte
@@ -657,19 +711,6 @@ var (
 	errInvalidRequest    = errors.New("invalid HTTP request")
 )
 
-// parseHTTP parses basic HTTP/1.1 headers and payload directly from raw byte sequences.
-//
-// Memory Impact:
-//   - Allocation-free. Parsed structure maps byte slices directly into the underlying gnet connection
-//     ring buffer window to avoid slice allocation or header string copying.
-//
-// Concurrency:
-// - Thread-safe. Executed sequentially within the active connection's event-loop thread.
-//
-// Performance Hacks:
-//   - Ring Buffer Zero-Copy: Operates directly on the slice returned by gnet.Conn.Peek.
-//   - Direct Scanner: Uses primitive byte scans (IndexByte, index loops) rather than regex or full-featured HTTP parsers
-//     to optimize parser state machines.
 func (h *AdsPacketHandler) parseHTTP(data []byte) (int, parsedHTTPRequest, error) {
 	var req parsedHTTPRequest
 
@@ -742,24 +783,35 @@ func (h *AdsPacketHandler) parseHTTP(data []byte) (int, parsedHTTPRequest, error
 	return totalLen, req, nil
 }
 
-// React processes the parsed HTTP request, evaluates validation rules, executes geo and rate filtering,
-// and serializes responses back into the gnet network stream.
-//
-// Memory Impact:
-// - Near zero heap allocations. Recycles all high-frequency operational values via sync.Pool structures:
-//   - adEventPool: Reuses pb.AdEvent objects.
-//   - trackRequestPool: Reuses JSON parsing targets.
-//   - responseBytesPool: Avoids heap-allocating output byte slices.
-//   - bufPool & bufferPool: Recycling bytes.Buffer objects to prevent garbage collection pressure.
-//
-// Concurrency:
-//   - Thread-safe. Designed for shared-nothing reactor threads. Executed exclusively inside connection-owned
-//     event loops.
-//
-// Performance Hacks:
-// - Bypasses standard reflect-based marshaling on outputs using vtproto fast path serialize methods.
-// - Reuses connection memory directly during filter and serialization cycles.
 func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action {
+	ctx, ok := c.Context().(*connContext)
+	if !ok {
+		ctx = &connContext{
+			pbReq: pb.AdEvent{
+				Metadata: &pb.EventMetadata{},
+			},
+			reqJSON: TrackRequest{
+				Payload: make([]byte, 0, 512),
+			},
+			evt: domain.Event{
+				Payload: make([]byte, 0, 1024),
+			},
+			valSlice: make([]any, 18),
+			resp:     pb.TrackResponse{},
+			bufSlice: make([]byte, 4096),
+			wReqID: bufWrapper{
+				buf: make([]byte, 0, 128),
+			},
+			wCamp: bufWrapper{
+				buf: make([]byte, 0, 128),
+			},
+			wTime: bufWrapper{
+				buf: make([]byte, 0, 128),
+			},
+		}
+		c.SetContext(ctx)
+	}
+
 	if len(req.Method) == 3 && req.Method[0] == 'G' && req.Method[1] == 'E' && req.Method[2] == 'T' {
 		if bytes.Equal(req.Path, []byte("/health")) {
 			c.Write(respHealth)
@@ -772,18 +824,18 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				return gnet.None
 			}
 
-			bufMetrics := bufferPool.Get().(*bytes.Buffer)
-			defer putBuffer(bufMetrics)
+			bufMetrics := &ctx.bufMetrics
+			bufMetrics.Reset()
 
 			for _, mf := range mfs {
 				_, _ = expfmt.MetricFamilyToText(bufMetrics, mf)
 			}
 
 			respSize := 200 + bufMetrics.Len()
-			bufSlicePtr := responseBytesPool.Get().(*[]byte)
-			bufSlice := *bufSlicePtr
+			bufSlice := ctx.bufSlice
 			if cap(bufSlice) < respSize {
 				bufSlice = make([]byte, respSize)
+				ctx.bufSlice = bufSlice
 			} else {
 				bufSlice = bufSlice[:respSize]
 			}
@@ -794,8 +846,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 			offset += copy(bufSlice[offset:], bufMetrics.Bytes())
 
 			c.Write(bufSlice[:offset])
-			*bufSlicePtr = bufSlice
-			responseBytesPool.Put(bufSlicePtr)
 			return gnet.None
 		}
 	}
@@ -825,19 +875,28 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 
 	uuidStart := time.Now()
 	id, _ := NewFastUUID()
-	// Observe NewFastUUID latency in nanoseconds so dashboard can detect
-	// unexpected entropy source contention (e.g. getrandom syscall backpressure).
+
 	metrics.UuidGenDuration.Observe(float64(time.Since(uuidStart).Nanoseconds()))
-	wReqID := bufPool.Get().(*bufWrapper)
+	wReqID := &ctx.wReqID
 	wReqID.buf = wReqID.buf[:0]
 	wReqID.buf = appendUUID(wReqID.buf, id)
-	defer bufPool.Put(wReqID)
 
 	contentType := unsafeString(req.ContentType)
 	if contentType == "application/x-protobuf" || contentType == "" {
 		metrics.FilterThroughput.WithLabelValues("protobuf").Inc()
-		pbReq := adEventPool.Get().(*pb.AdEvent)
-		defer putAdEvent(pbReq)
+		pbReq := &ctx.pbReq
+		pbReq.CampaignId = pbReq.CampaignId[:0]
+		pbReq.EventType = pbReq.EventType[:0]
+		if pbReq.Metadata != nil {
+			pbReq.Metadata.ClickId = pbReq.Metadata.ClickId[:0]
+			pbReq.Metadata.UserId = pbReq.Metadata.UserId[:0]
+			pbReq.Metadata.DeviceType = pbReq.Metadata.DeviceType[:0]
+			pbReq.Metadata.Os = pbReq.Metadata.Os[:0]
+			for k := range pbReq.Metadata.Extra {
+				delete(pbReq.Metadata.Extra, k)
+			}
+			pbReq.Metadata.ExtraBytes = pbReq.Metadata.ExtraBytes[:0]
+		}
 
 		if err := pbReq.UnmarshalVT(req.Body); err != nil {
 			slog.Warn("invalid protobuf body", "error", err, "request_id", id)
@@ -872,13 +931,12 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 		}
 	} else {
 		metrics.FilterThroughput.WithLabelValues("json").Inc()
-		reqJSON := trackRequestPool.Get().(*TrackRequest)
+		reqJSON := &ctx.reqJSON
 		reqJSON.CampaignID = uuid.Nil
 		reqJSON.UserID = ""
 		reqJSON.Type = ""
 		reqJSON.ClickID = ""
 		reqJSON.Payload = reqJSON.Payload[:0]
-		defer trackRequestPool.Put(reqJSON)
 
 		if err := reqJSON.UnmarshalJSON(req.Body); err != nil {
 			slog.Warn("invalid json body", "error", err, "request_id", id)
@@ -900,7 +958,7 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 		clickID = requestIDStr
 	}
 
-	evt := domain.EventPool.Get().(*domain.Event)
+	evt := &ctx.evt
 	evt.Reset()
 	evt.ClickID = clickID
 	evt.CampaignID = campaignID
@@ -913,7 +971,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 	if h.filterEngine != nil {
 		if err := h.filterEngine.Check(context.Background(), evt); err != nil {
 			if errors.Is(err, ErrEmergencyBreakerActive) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: emergency breaker active", "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("emergency_breaker").Inc()
 				metrics.FilterDecisions.WithLabelValues("emergency_breaker").Inc()
@@ -921,7 +978,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				c.Write(respEmergencyBreaker)
 				return gnet.None
 			} else if errors.Is(err, ErrRateLimitExceeded) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: rate limit", "error", err, "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("rate_limit").Inc()
 				metrics.FilterDecisions.WithLabelValues("rate_limited").Inc()
@@ -929,7 +985,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				c.Write(respRateLimit)
 				return gnet.None
 			} else if errors.Is(err, ErrDuplicateEvent) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: duplicate", "error", err, "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("duplicate").Inc()
 				metrics.FilterDecisions.WithLabelValues("duplicate").Inc()
@@ -937,7 +992,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				c.Write(respDuplicate)
 				return gnet.None
 			} else if errors.Is(err, ErrBudgetExhausted) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: budget exhausted", "error", err, "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("budget").Inc()
 				metrics.FilterDecisions.WithLabelValues("budget_exhausted").Inc()
@@ -945,7 +999,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				c.Write(respBudget)
 				return gnet.None
 			} else if errors.Is(err, ErrPacingExhausted) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: pacing exhausted", "error", err, "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("pacing").Inc()
 				metrics.FilterDecisions.WithLabelValues("pacing_limit").Inc()
@@ -953,7 +1006,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				c.Write(respPacing)
 				return gnet.None
 			} else if errors.Is(err, ErrFreqLimitExceeded) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: frequency limit", "error", err, "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("freq").Inc()
 				metrics.FilterDecisions.WithLabelValues("frequency_capped").Inc()
@@ -961,7 +1013,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				c.Write(respFreq)
 				return gnet.None
 			} else if errors.Is(err, ErrGeoBlocked) {
-				domain.EventPool.Put(evt)
 				slog.Warn("event rejected: geo blocked", "error", err, "request_id", id)
 				metrics.FilterBlockedTotal.WithLabelValues("geo").Inc()
 				metrics.FilterDecisions.WithLabelValues("geo_blocked").Inc()
@@ -976,15 +1027,14 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 				shard := h.sharder.GetShard(evt.CampaignID)
 				rdb := h.rdbs[shard]
 
-				valSlicePtr := fraudValuesPool.Get().(*[]any)
-				valSlice := *valSlicePtr
+				valSlice := ctx.valSlice
 
-				wCamp := bufPool.Get().(*bufWrapper)
+				wCamp := &ctx.wCamp
 				wCamp.buf = wCamp.buf[:0]
 				wCamp.buf = appendUUID(wCamp.buf, evt.CampaignID)
 				campIDStr := unsafeString(wCamp.buf)
 
-				wTime := bufPool.Get().(*bufWrapper)
+				wTime := &ctx.wTime
 				wTime.buf = wTime.buf[:0]
 				wTime.buf = evt.CreatedAt.AppendFormat(wTime.buf, time.RFC3339Nano)
 				timeStr := unsafeString(wTime.buf)
@@ -1017,15 +1067,10 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 					Values: valSlice,
 				}).Err()
 
-				fraudValuesPool.Put(valSlicePtr)
-				bufPool.Put(wCamp)
-				bufPool.Put(wTime)
-
 				if rdbErr != nil {
 					slog.Error("failed to write to fraud stream", "error", rdbErr, "request_id", id)
 				}
 			} else {
-				domain.EventPool.Put(evt)
 				slog.Error("filter engine failure", "error", err, "request_id", id)
 				status = http.StatusInternalServerError
 				c.Write(respInternalError)
@@ -1035,12 +1080,11 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 	}
 
 	metrics.FilterDecisions.WithLabelValues("accepted").Inc()
-	domain.EventPool.Put(evt)
 
 	accept := unsafeString(req.Accept)
 	if accept == "application/x-protobuf" {
-		resp := trackResponsePool.Get().(*pb.TrackResponse)
-		defer putTrackResponse(resp)
+		resp := &ctx.resp
+		resp.Reset()
 
 		if requestIDStr == "" {
 			requestIDStr = unsafeString(wReqID.buf)
@@ -1049,10 +1093,10 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 		resp.Status = "accepted"
 
 		respSize := resp.SizeVT()
-		bufSlicePtr := responseBytesPool.Get().(*[]byte)
-		bufSlice := *bufSlicePtr
+		bufSlice := ctx.bufSlice
 		if cap(bufSlice) < 200+respSize {
 			bufSlice = make([]byte, 200+respSize)
+			ctx.bufSlice = bufSlice
 		} else {
 			bufSlice = bufSlice[:200+respSize]
 		}
@@ -1063,8 +1107,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 
 		n, err := resp.MarshalToVT(bufSlice[offset : offset+respSize])
 		if err != nil {
-			*bufSlicePtr = bufSlice
-			responseBytesPool.Put(bufSlicePtr)
 			slog.Error("failed to marshal proto response", "error", err, "request_id", id)
 			status = http.StatusInternalServerError
 			c.Write(respInternalError)
@@ -1075,18 +1117,16 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 		metrics.GnetBytesSent.Add(float64(len(outSlice)))
 		metrics.GnetPacketsSent.Inc()
 		c.Write(outSlice)
-		*bufSlicePtr = bufSlice
-		responseBytesPool.Put(bufSlicePtr)
 	} else {
 		if requestIDStr == "" {
 			requestIDStr = unsafeString(wReqID.buf)
 		}
 
 		respSize := len(`{"request_id":"","status":"accepted"}`) + len(requestIDStr)
-		bufSlicePtr := responseBytesPool.Get().(*[]byte)
-		bufSlice := *bufSlicePtr
+		bufSlice := ctx.bufSlice
 		if cap(bufSlice) < 200+respSize {
 			bufSlice = make([]byte, 200+respSize)
+			ctx.bufSlice = bufSlice
 		} else {
 			bufSlice = bufSlice[:200+respSize]
 		}
@@ -1103,8 +1143,6 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 		metrics.GnetBytesSent.Add(float64(outLen))
 		metrics.GnetPacketsSent.Inc()
 		c.Write(bufSlice[:outLen])
-		*bufSlicePtr = bufSlice
-		responseBytesPool.Put(bufSlicePtr)
 	}
 
 	return gnet.None

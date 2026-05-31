@@ -146,7 +146,11 @@ var staticRemoteAddr = &net.TCPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 1234}
 type mockGnetConn struct {
 	gnet.Conn
 	written []byte
+	ctx     any
 }
+
+func (m *mockGnetConn) Context() any     { return m.ctx }
+func (m *mockGnetConn) SetContext(v any) { m.ctx = v }
 
 func (m *mockGnetConn) Write(b []byte) (int, error) {
 	m.written = append(m.written[:0], b...)
