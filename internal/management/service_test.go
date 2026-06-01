@@ -21,19 +21,22 @@ func TestManagementService_CancelCampaign(t *testing.T) {
 	}
 
 	pool, cleanupDB := database.SetupTestDB(t)
-	defer cleanupDB()
 
 	rdb, cleanupRedis := database.SetupTestRedis(t)
-	defer cleanupRedis()
 
 	cfg := &config.Config{}
 	cfg.Management.CancellationFeePercent = 10.0
-	cfg.Lifecycle.WaitTimeoutMs = 10
+	cfg.Lifecycle.WaitTimeoutMs = 500
 	cfg.CampaignUpdateChannel = "test:campaign:updates"
 
 	sharder := ads.NewJumpHashSharder(1)
 	svc := NewService(pool, []redis.UniversalClient{rdb}, sharder, cfg)
-	defer svc.Close()
+
+	t.Cleanup(func() {
+		svc.Close()
+		cleanupRedis()
+		cleanupDB()
+	})
 
 	ctx := context.Background()
 	customerID := uuid.New()
@@ -67,12 +70,19 @@ func TestManagementService_Idempotency(t *testing.T) {
 	}
 
 	pool, cleanupDB := database.SetupTestDB(t)
-	defer cleanupDB()
-	rdb, cleanupRedis := database.SetupTestRedis(t)
-	defer cleanupRedis()
 
-	svc := NewService(pool, []redis.UniversalClient{rdb}, ads.NewJumpHashSharder(1), &config.Config{})
-	defer svc.Close()
+	rdb, cleanupRedis := database.SetupTestRedis(t)
+
+	cfg := &config.Config{}
+	cfg.Lifecycle.WaitTimeoutMs = 500
+
+	svc := NewService(pool, []redis.UniversalClient{rdb}, ads.NewJumpHashSharder(1), cfg)
+
+	t.Cleanup(func() {
+		svc.Close()
+		cleanupRedis()
+		cleanupDB()
+	})
 	ctx := context.Background()
 	customerID := uuid.New()
 	_ = svc.CreateCustomer(ctx, customerID, "Idem Tester", 1_000_000_000, "USD")

@@ -42,6 +42,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 		StatsFlushMs:       100,
 		MaxWorkers:         2,
 		WriteTimeoutMs:     5000,
+		FilterTimeoutMs:    5000,
 		MaxRequestBodySize: 1024 * 1024,
 		StreamMaxLen:       100000,
 	}

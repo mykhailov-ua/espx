@@ -20,18 +20,27 @@ func TestCreditScoringAndOverdraft(t *testing.T) {
 	}
 
 	pool, cleanupDB := database.SetupTestDB(t)
-	defer cleanupDB()
 
 	rdb, cleanupRedis := database.SetupTestRedis(t)
-	defer cleanupRedis()
 
 	cfg := &config.Config{
-		CampaignUpdateChannel: "test:credit-updates",
+		CampaignUpdateChannel:       "test:credit-updates",
+		CreditScoringMinAgeDays:     7.0,
+		CreditScoringMatureAgeDays:  30.0,
+		CreditScoringMidTierPercent: 15,
+		CreditScoringMaturePercent:  30,
+		CreditScoringMaxCap:         10_000_000_000,
 	}
+	cfg.Lifecycle.WaitTimeoutMs = 500
 
 	sharder := ads.NewJumpHashSharder(1)
 	svc := NewService(pool, []redis.UniversalClient{rdb}, sharder, cfg)
-	defer svc.Close()
+
+	t.Cleanup(func() {
+		svc.Close()
+		cleanupRedis()
+		cleanupDB()
+	})
 
 	ctx := context.Background()
 	customerID := uuid.New()

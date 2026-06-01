@@ -43,6 +43,7 @@ func TestE2EFlow(t *testing.T) {
 		StatsFlushMs:       100,
 		MaxWorkers:         2,
 		WriteTimeoutMs:     1000,
+		FilterTimeoutMs:    1000,
 		MaxRequestBodySize: 1024 * 1024,
 		StreamMaxLen:       100000,
 	}
@@ -134,6 +135,8 @@ func TestE2EFlow_Protobuf(t *testing.T) {
 		EventFlushMs:       100,
 		StatsFlushMs:       100,
 		MaxWorkers:         2,
+		WriteTimeoutMs:     1000,
+		FilterTimeoutMs:    1000,
 		MaxRequestBodySize: 1024 * 1024,
 		StreamMaxLen:       100000,
 	}
