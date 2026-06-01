@@ -14,19 +14,41 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"github.com/mykhailov-ua/ad-event-processor/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	if len(os.Args) > 2 && os.Args[1] == "--health-probe" {
+		resp, err := http.Get(os.Args[2])
+		if err != nil || resp.StatusCode != 200 {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	slogLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(slogLogger)
 
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	loggerCfg := logger.Config{
+		LogDir:           cfg.Logger.Dir,
+		FlushBufferSize:  cfg.Logger.FlushSizeKB * 1024,
+		RotateSize:       int64(cfg.Logger.RotateSizeMB) * 1024 * 1024,
+		RotateInterval:   cfg.Logger.RotateInterval,
+		DiskLatencyLimit: cfg.Logger.LatencyLimit,
+	}
+	appLogger := logger.NewLogger(loggerCfg, cfg.Logger.Shards)
+	defer appLogger.Close()
+
+	logger.RegisterMetrics()
+	go appLogger.StartMetricsReporter(15 * time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -111,6 +133,7 @@ func main() {
 			time.Duration(cfg.StreamMinIdleMs)*time.Millisecond,
 			time.Duration(cfg.Lifecycle.DrainTimeoutMs)*time.Millisecond,
 		)
+		pc.SetLogger(appLogger)
 		pgConsumers = append(pgConsumers, pc)
 		pc.Start(procCtx)
 
@@ -130,6 +153,7 @@ func main() {
 			time.Duration(cfg.StreamMinIdleMs)*time.Millisecond,
 			time.Duration(cfg.Lifecycle.DrainTimeoutMs)*time.Millisecond,
 		)
+		cc.SetLogger(appLogger)
 		chConsumers = append(chConsumers, cc)
 		cc.Start(procCtx)
 
@@ -149,6 +173,7 @@ func main() {
 			time.Duration(cfg.StreamMinIdleMs)*time.Millisecond,
 			time.Duration(cfg.Lifecycle.DrainTimeoutMs)*time.Millisecond,
 		)
+		fc.SetLogger(appLogger)
 		chConsumers = append(chConsumers, fc)
 		fc.Start(procCtx)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,19 +13,42 @@ import (
 	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
+	"github.com/mykhailov-ua/ad-event-processor/pkg/logger"
 	"github.com/panjf2000/gnet/v2"
 	"github.com/redis/go-redis/v9"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+	if len(os.Args) > 2 && os.Args[1] == "--health-probe" {
+		resp, err := http.Get(os.Args[2])
+		if err != nil || resp.StatusCode != 200 {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	slogLogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(slogLogger)
 
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	loggerCfg := logger.Config{
+		LogDir:           cfg.Logger.Dir,
+		FlushBufferSize:  cfg.Logger.FlushSizeKB * 1024,
+		RotateSize:       int64(cfg.Logger.RotateSizeMB) * 1024 * 1024,
+		RotateInterval:   cfg.Logger.RotateInterval,
+		DiskLatencyLimit: cfg.Logger.LatencyLimit,
+	}
+	appLogger := logger.NewLogger(loggerCfg, cfg.Logger.Shards)
+	defer appLogger.Close()
+
+	logger.RegisterMetrics()
+	go appLogger.StartMetricsReporter(15 * time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -84,10 +108,20 @@ func main() {
 	var geoProvider ads.GeoProvider
 	geoProvider, err = ads.NewMaxMindProvider("deploy/geoip/GeoLite2-Country.mmdb")
 	if err != nil {
-		slog.Warn("failed to load MaxMind DB, using mock", "error", err)
+		if cfg.Env == "prod" || cfg.Env == "production" {
+			slog.Error("FATAL: MaxMind DB load failed in production", "error", err)
+			os.Exit(1)
+		}
+		slog.Warn("MaxMind DB load failed, using mock geo provider (development only)", "error", err)
 		geoProvider = &ads.MockGeoProvider{}
 	}
 	defer geoProvider.Close()
+
+	if _, ok := geoProvider.(*ads.MaxMindProvider); ok {
+		metrics.GeoProviderStatus.Set(1)
+	} else {
+		metrics.GeoProviderStatus.Set(0)
+	}
 
 	geoFilter := ads.NewGeoFilter(geoProvider, registry)
 	fraudFilter := ads.NewFraudFilter(geoProvider, rdbs[0], time.Duration(cfg.TTCMinMs)*time.Millisecond)
@@ -115,6 +149,8 @@ func main() {
 	filterEngine := ads.NewFilterEngine(breakerFilter, geoFilter, fraudFilter, unifiedFilter)
 
 	gnetHandler := ads.NewAdsPacketHandler(cfg, registry, filterEngine, pool, rdbs, sharder, cfg.FraudStreamName)
+	gnetHandler.SetLogger(appLogger)
+	gnetHandler.StartHealthProbe(ctx)
 
 	slog.Info("starting ad-event-tracker via gnet", "port", cfg.ServerPort)
 

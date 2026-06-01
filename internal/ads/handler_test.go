@@ -171,13 +171,14 @@ func BenchmarkAdsPacketHandlerJSON(b *testing.B) {
 
 	payload := []byte(`{"campaign_id":"` + uuid.NewString() + `","user_id":"user123","type":"click","click_id":"click123","payload":{}}`)
 	req := parsedHTTPRequest{
-		Method:        []byte("POST"),
-		Path:          []byte("/track"),
-		ContentType:   []byte("application/json"),
-		ClientIP:      []byte("1.1.1.1"),
-		UserAgent:     []byte("Mozilla/5.0"),
-		Body:          payload,
-		ContentLength: len(payload),
+		Method:           []byte("POST"),
+		Path:             []byte("/track"),
+		ContentType:      []byte("application/json"),
+		ClientIP:         []byte("1.1.1.1"),
+		UserAgent:        []byte("Mozilla/5.0"),
+		Body:             payload,
+		ContentLength:    len(payload),
+		HasContentLength: true,
 	}
 
 	conn := &mockGnetConn{written: make([]byte, 0, 512)}
@@ -205,13 +206,14 @@ func BenchmarkAdsPacketHandlerProto(b *testing.B) {
 	}
 	body, _ := proto.Marshal(pbPayload)
 	req := parsedHTTPRequest{
-		Method:        []byte("POST"),
-		Path:          []byte("/track"),
-		ContentType:   []byte("application/x-protobuf"),
-		ClientIP:      []byte("1.1.1.1"),
-		UserAgent:     []byte("Mozilla/5.0"),
-		Body:          body,
-		ContentLength: len(body),
+		Method:           []byte("POST"),
+		Path:             []byte("/track"),
+		ContentType:      []byte("application/x-protobuf"),
+		ClientIP:         []byte("1.1.1.1"),
+		UserAgent:        []byte("Mozilla/5.0"),
+		Body:             body,
+		ContentLength:    len(body),
+		HasContentLength: true,
 	}
 
 	conn := &mockGnetConn{written: make([]byte, 0, 512)}
