@@ -30,3 +30,63 @@ groups:
         annotations:
           summary: "High HTTP latency detected"
           description: "P99 latency is above 500ms for 2 minutes."
+
+      # Alert for Redis instance down
+      - alert: RedisInstanceDown
+        expr: up{job="redis"} == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis instance is down"
+          description: "A Redis instance is unreachable."
+
+      # Alert for Redis memory high
+      - alert: RedisMemoryHigh
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage above 90%"
+          description: "Redis instance memory usage has exceeded 90% of maxmemory."
+
+      # Alert for Redis AOF rewrite failure
+      - alert: RedisAOFRewriteFailure
+        expr: redis_aof_last_bgrewrite_status == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis AOF rewrite failed"
+          description: "Redis background AOF rewrite failed."
+
+      # Alert for log disk degradation
+      - alert: LogDiskDegraded
+        expr: log_disk_degraded == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Log disk degradation detected"
+          description: "Active log pipeline is degraded or NVMe write latency EMA exceeds SLA limit for more than 5 minutes."
+
+      # Alert for log shard saturation
+      - alert: LogShardSaturation
+        expr: log_shards_saturation_ratio > 0.8
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High log shard saturation"
+          description: "A lock-free ring buffer log shard has exceeded 80% saturation."
+
+      # Alert for log load shedding
+      - alert: LogLoadSheddingActive
+        expr: rate(log_load_shedding_events_total[1m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Logger load shedding active"
+          description: "Telemetry logs are being dropped/shedded due to queue fullness or disk degradation."

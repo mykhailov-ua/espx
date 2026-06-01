@@ -162,4 +162,8 @@ var (
 		Help:    "Execution duration of NewFastUUID in nanoseconds",
 		Buckets: []float64{10, 25, 50, 100, 250, 500, 1000, 2500, 5000},
 	})
+	GeoProviderStatus = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "ad_geo_provider_status",
+		Help: "Status of the geo provider: 1 = real MaxMind, 0 = mock",
+	})
 )

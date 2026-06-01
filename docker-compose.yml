@@ -13,6 +13,7 @@ services:
       - GOGC=50             # aggressive GC target: trade CPU for lower heap steady-state
     volumes:
       - ./deploy/geoip:/deploy/geoip:ro
+      - espx_logs:/var/log/espx:rw
     ulimits:
       nofile:
         # gnet opens one fd per TCP connection; 100 000 allows ~100 k concurrent connections per instance
@@ -23,8 +24,26 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      disable: true
+      test: ["CMD", "--health-probe", "http://127.0.0.1:8181/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
     restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-0:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-4:
+        condition: service_healthy
+      redis-5:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -46,6 +65,7 @@ services:
       - GOGC=50
     volumes:
       - ./deploy/geoip:/deploy/geoip:ro
+      - espx_logs:/var/log/espx:rw
     ulimits:
       nofile:
         soft: 100000
@@ -55,8 +75,26 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      disable: true
+      test: ["CMD", "--health-probe", "http://127.0.0.1:8182/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
     restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-0:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-4:
+        condition: service_healthy
+      redis-5:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -78,6 +116,7 @@ services:
       - GOGC=50
     volumes:
       - ./deploy/geoip:/deploy/geoip:ro
+      - espx_logs:/var/log/espx:rw
     ulimits:
       nofile:
         soft: 100000
@@ -87,8 +126,26 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      disable: true
+      test: ["CMD", "--health-probe", "http://127.0.0.1:8183/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
     restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-0:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-4:
+        condition: service_healthy
+      redis-5:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -110,6 +167,7 @@ services:
       - GOGC=50
     volumes:
       - ./deploy/geoip:/deploy/geoip:ro
+      - espx_logs:/var/log/espx:rw
     ulimits:
       nofile:
         soft: 100000
@@ -119,8 +177,26 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      disable: true
+      test: ["CMD", "--health-probe", "http://127.0.0.1:8184/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
     restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-0:
+        condition: service_healthy
+      redis-1:
+        condition: service_healthy
+      redis-2:
+        condition: service_healthy
+      redis-3:
+        condition: service_healthy
+      redis-4:
+        condition: service_healthy
+      redis-5:
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -140,10 +216,14 @@ services:
       - ./deploy/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
       - ./deploy/nginx/lua:/etc/nginx/lua:ro
     depends_on:
-      - tracker-0
-      - tracker-1
-      - tracker-2
-      - tracker-3
+      tracker-0:
+        condition: service_healthy
+      tracker-1:
+        condition: service_healthy
+      tracker-2:
+        condition: service_healthy
+      tracker-3:
+        condition: service_healthy
     ulimits:
       nofile:
         soft: 100000
@@ -168,14 +248,23 @@ services:
     network_mode: "${NET_MODE:-host}"
     env_file:
       - .env
+    volumes:
+      - espx_logs:/var/log/espx:rw
     environment:
       - DB_DSN=${DB_DSN}
-      - REDIS_ADDRS=localhost:6479,localhost:6480,localhost:6481,localhost:6482,localhost:6483,localhost:6484
+      - REDIS_ADDRS=127.0.0.1:6479,127.0.0.1:6480,127.0.0.1:6481,127.0.0.1:6482,127.0.0.1:6483,127.0.0.1:6484
       - CH_DSN=${CH_DSN}
-      - PROCESSOR_PORT=${PROCESSOR_PORT}
+      - PROCESSOR_PORT=${PROCESSOR_PORT:-8186}
       - DB_PROCESSOR_MAX_CONNS=${DB_PROCESSOR_MAX_CONNS}
+      - ENV=${ENV:-development}
       - GOMEMLIMIT=1500MiB  # processor holds larger in-flight batches; needs wider heap
       - GOGC=100            # standard GC pace; processor is not latency-critical
+    healthcheck:
+      test: ["CMD", "--health-probe", "http://127.0.0.1:8186/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -187,7 +276,7 @@ services:
       redis-0:
         condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     logging:
       driver: "json-file"
       options:
@@ -301,7 +390,10 @@ services:
     ports:
       - "6479:6379"
     command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}",
-              "--save", ""]  # persistence disabled; Redis is a hot cache, not a durable store
+              "--appendonly", "yes", "--appendfsync", "everysec",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_0_data:/data
     deploy:
       resources:
         limits:
@@ -320,7 +412,11 @@ services:
       - .env
     ports:
       - "6480:6379"
-    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}", "--save", ""]
+    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}",
+              "--appendonly", "yes", "--appendfsync", "everysec",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_1_data:/data
     deploy:
       resources:
         limits:
@@ -339,7 +435,11 @@ services:
       - .env
     ports:
       - "6481:6379"
-    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}", "--save", ""]
+    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}",
+              "--appendonly", "yes", "--appendfsync", "everysec",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_2_data:/data
     deploy:
       resources:
         limits:
@@ -358,7 +458,11 @@ services:
       - .env
     ports:
       - "6482:6379"
-    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}", "--save", ""]
+    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}",
+              "--appendonly", "yes", "--appendfsync", "everysec",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_3_data:/data
     deploy:
       resources:
         limits:
@@ -377,7 +481,11 @@ services:
       - .env
     ports:
       - "6483:6379"
-    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}", "--save", ""]
+    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}",
+              "--appendonly", "yes", "--appendfsync", "everysec",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_4_data:/data
     deploy:
       resources:
         limits:
@@ -396,7 +504,11 @@ services:
       - .env
     ports:
       - "6484:6379"
-    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}", "--save", ""]
+    command: ["redis-server", "--port", "6379", "--requirepass", "${REDIS_PASSWORD}",
+              "--appendonly", "yes", "--appendfsync", "everysec",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_5_data:/data
     deploy:
       resources:
         limits:
@@ -438,7 +550,10 @@ services:
       - CLICKHOUSE_PASSWORD=${CH_PASSWORD}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     healthcheck:
-      disable: true
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     logging:
       driver: "json-file"
       options:
@@ -518,6 +633,27 @@ services:
         max-size: "100m"
         max-file: "3"
 
+  log-evacuator:
+    build:
+      context: .
+      dockerfile: Dockerfile.log-evacuator
+    volumes:
+      - espx_logs:/var/log/espx:rw
+      - ${STORAGE_BOX_SSH_KEY_PATH:-~/.ssh/id_rsa}:/root/.ssh/id_rsa:ro
+    environment:
+      - LOG_DIR=/var/log/espx
+      - STORAGE_BOX_HOST=${STORAGE_BOX_HOST}
+      - STORAGE_BOX_USER=${STORAGE_BOX_USER}
+      - STORAGE_BOX_PATH=${STORAGE_BOX_PATH:-/}
+      - RSYNC_BWLIMIT=${RSYNC_BWLIMIT:-5000}
+    profiles:
+      - tools
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   frontend:
   backend:
@@ -527,3 +663,10 @@ networks:
 volumes:
   db_data:
   clickhouse_data:
+  redis_0_data:
+  redis_1_data:
+  redis_2_data:
+  redis_3_data:
+  redis_4_data:
+  redis_5_data:
+  espx_logs:
