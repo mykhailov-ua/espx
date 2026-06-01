@@ -1,11 +1,11 @@
 # Development Guide
 
-Tooling, testing, and maintenance workflow for the `eSPX` sharded ingestion pipeline.
+Requirements, tasks, and service definitions for the `eSPX` ingestion pipeline.
 
 ## Requirements
 
 - Go 1.25+
-- Docker & Docker Compose
+- Docker and Docker Compose
 - `buf` CLI
 
 ---
@@ -14,87 +14,110 @@ Tooling, testing, and maintenance workflow for the `eSPX` sharded ingestion pipe
 
 | Target | Command | Purpose |
 | :--- | :--- | :--- |
-| `make fmt` | `go fmt ./...` | Code styling format. |
+| `make fmt` | `go fmt ./...` | Format code. |
 | `make proto` | `buf generate` | Compile Protobuf schemas. |
-| `make test` | `go test -v ./...` | Execute unit and integration tests. |
-| `make build` | `docker build ...` | Compile unified multi-stage Docker image. |
+| `make test` | `go test -v ./...` | Run tests. |
+| `make build` | `docker build ...` | Build Docker image. |
 
 ---
 
-## Git Hooks & Local Quality Control
+## Git Hooks
 
-Local CI emulation is handled natively via **Lefthook** to execute lightweight checks without Docker/containers dependency.
+Git hook execution is managed via **Lefthook**.
 
-- **Pre-commit**: Automatically executes code format checks and statical analysis:
+- **Pre-commit**: Runs linter:
   ```bash
   make lint
   ```
-- **Pre-push**: Executes the test suite prior to remote push:
+- **Pre-push**: Runs test suite:
   ```bash
   make test
   ```
 
-Install hooks using:
+Install hooks:
 ```bash
 lefthook install
 ```
 
 ---
 
-## Ports & Services
+## Ports and Services
 
 | Service | Port | Description |
 | :--- | :--- | :--- |
-| **Nginx** | 8180 | Edge Load Balancer |
-| **Tracker** | 8181-8184 | Stateless Ingestion Instances (`cmd/tracker.go`) |
-| **Processor** | 8186 | Async Stream Batch Settlement (`cmd/processor.go`) |
-| **Management** | 8188 | Control Plane Gateway (`cmd/management.go`) |
-| **Auth Server** | 51051 | gRPC Authentication (`cmd/auth.go`) |
-| **Redis Shards** | 6479-6484 | Sharded In-Memory Edge Cache (0-5) |
-| **PostgreSQL** | 5440 | Relational ACID database |
-| **ClickHouse** | 9100, 8223 | Columnar analytics database |
-| **Prometheus** | 9190 | Telemetry Scraper |
-| **Alertmanager** | 9093 | Alert Routing |
-| **Telegram Proxy** | 8222 | Telegram Alert Webhook (`cmd/telegram.go`) |
-| **Grafana** | 3100 | Visualization Server |
+| **Nginx** | 8180 | Load Balancer |
+| **Tracker** | 8181-8184 | Ingestion instances (`cmd/tracker.go`) |
+| **Processor** | 8186 | Stream processor (`cmd/processor.go`) |
+| **Management** | 8188 | Management service (`cmd/management.go`) |
+| **Auth Server** | 51051 | gRPC Auth service (`cmd/auth.go`) |
+| **Redis Shards** | 6479-6484 | Redis instances (0-5) |
+| **PostgreSQL** | 5440 | Postgres database |
+| **ClickHouse** | 9100, 8223 | ClickHouse database |
+| **Prometheus** | 9190 | Telemetry scraper |
+| **Alertmanager** | 9093 | Alert routing |
+| **Telegram Proxy** | 8222 | Telegram webhook (`cmd/telegram.go`) |
+| **Grafana** | 3100 | Visualization dashboard |
 
 ---
 
 ## CLI Tools
 
-### DLQ Management Utility (`cmd/dlq.go`)
+### DLQ Utility (`cmd/dlq.go`)
 
-Interacts with Dead Letter Queue stream in Redis.
+Manages the Redis Dead Letter Queue (DLQ).
 
 *   **Archive events to disk**:
     ```bash
     go run cmd/dlq.go -action=archive -stream=ad:events:dlq -dest=dlq_archive.bin -batch=1000
     ```
-    Extracts DLQ entries, wraps them into binary length-prefixed `AdDLQEvent` Protobuf segments, writes to disk, and acknowledges/purges entries from Redis.
+    Extracts events from Redis DLQ, serializes them as length-prefixed `AdDLQEvent` Protobuf segments, writes to disk, and acknowledges the entries in Redis.
 *   **Restore events from disk**:
     ```bash
     go run cmd/dlq.go -action=restore -dest=dlq_archive.bin -stream=ad:events -batch=1000
     ```
-    Parses length-prefixed binary segments and requeues them back into Redis ingestion stream (`ad:events`).
+    Deserializes events from disk and writes them to the Redis ingestion stream (`ad:events`).
 *   **Requeue directly**:
     ```bash
     go run cmd/dlq.go -action=requeue -stream=ad:events:dlq -dest=ad:events -batch=1000
     ```
-    Pipes events directly from the DLQ stream back to the active ingestion queue in Redis.
+    Moves events from the Redis DLQ to the active ingestion queue.
 
 ---
 
 ## Performance Gate Setup
 
-To prevent hot path latency and memory regressions, pull requests are validated on dedicated bare-metal runners.
+Pull requests are validated on target runners to ensure latency and memory budgets are met.
 
 ### Gate Thresholds
 
-- **Heap Allocations**: Must be exactly `0 allocs/op`.
-- **Memory Consumption**: Must be exactly `0 B/op`.
-- **Latency Regression**: Must not exceed `12.0%` with statistical significance (p < 0.05).
+- **Heap Allocations**: `0 allocs/op`.
+- **Memory Consumption**: `0 B/op`.
+- **Latency Regression**: `<= 12.0%` (p < 0.05).
 
-Local PR comparison can be emulated via the gate parser:
+Compare baseline and branch benchmarks locally:
 ```bash
 go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt
 ```
+
+---
+
+## Operations and Infrastructure
+
+### Specialized Containers
+
+#### Dockerfile.log-evacuator
+The production image built via `Dockerfile` uses a statically linked, debian-distroless base lacking shell, package manager, and diagnostic tools to optimize performance and security. Out-of-process, claim-based log evacuation requires OS-level utility bins (`rsync`, `zstd`, `openssh-client`, `bash`, `coreutils`). `Dockerfile.log-evacuator` packages these dependencies into a dedicated, isolated Alpine container to separate file transport/compression duties from the performance-critical ingestion services.
+
+### Log Evacuation Procedures
+- **Hetzner Storage Box Setup**: Generate a passphrase-less Ed25519 SSH key (`~/.ssh/storagebox_id`), register the public key in Hetzner Robot Console, and set `STORAGE_BOX_SSH_KEY_PATH=/root/.ssh/storagebox_id` in `.env`.
+- **Cron Evacuation Trigger**: Copy `deploy/cron/log-evacuate.cron` to `/etc/cron.d/log-evacuate` (chmod `0644`). It re-runs every 5 minutes logging execution status to `/var/log/espx-evacuate.log`.
+- **Claim Renaming Details**: Segments are claimed by renaming `/var/log/espx/segment_*.log.ready` to `*.log.evacuating`, compressed with `zstd -3 --rm`, and rsync-uploaded. Upon successful transfer, local source files are purged.
+- **Recovering Locked Segments**: If a crash halts compression, manually rename stuck `.evacuating` files back to `.ready` to trigger a retry.
+- **Log Retention Policy**: There is no automatic retention on the Hetzner Storage Box. Manually execute purges via SSH or schedule periodic cleanups for segments older than the desired threshold.
+
+### Redis Recovery Verification
+- **AOF Load Status**: Connect to the shard and run `redis-cli INFO persistence | grep aof_enabled`. Confirm output is `aof_enabled:1`.
+- **Stream Verification**: Query lengths via `redis-cli XLEN ad:events:stream` and verify active consumer groups using `redis-cli XINFO GROUPS ad:events:stream`.
+- **Budget Counters**: Verify daily budget key presence with `redis-cli KEYS "budget:campaign:*"`.
+- **DLQ Integrity**: Confirm DLQ stream depth using `redis-cli XLEN ad:events:dlq`.
+- **Budget Reconciliation**: Realignment is initiated by running the management reconciliation worker or CLI tool, monitored via `ad_redis_reconciliation_duration_seconds`.
