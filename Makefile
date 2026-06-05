@@ -6,7 +6,7 @@ fmt:
 lint: fmt
 	@if [ -z "$$(which golangci-lint 2> /dev/null)" ]; then \
 		echo "Installing golangci-lint..."; \
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.5; \
 	fi
 	@GOPATH=$$(go env GOPATH); \
 	if [ -z "$$GOPATH" ]; then GOPATH=$$HOME/go; fi; \
