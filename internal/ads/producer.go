@@ -46,7 +46,7 @@ var (
 
 // StreamProducer writes ad events to a Redis Stream as vtproto-encoded messages.
 // maxStreamLen controls the approximate MAXLEN trim; it should be set to at least
-// maxWorkers × batchSize × expected_flush_lag_seconds to prevent data loss.
+// maxWorkers x batchSize x expected_flush_lag_seconds to prevent data loss.
 type StreamProducer struct {
 	rdb          redis.UniversalClient
 	streamName   string

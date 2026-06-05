@@ -393,6 +393,82 @@ func (x *AdDLQEvent) GetRetryCount() int32 {
 	return 0
 }
 
+type AdLogRecord struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TimestampUnix int64                  `protobuf:"varint,1,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	CampaignId    []byte                 `protobuf:"bytes,2,opt,name=campaign_id,json=campaignId,proto3" json:"campaign_id,omitempty"`
+	ClickId       []byte                 `protobuf:"bytes,3,opt,name=click_id,json=clickId,proto3" json:"click_id,omitempty"`
+	EventType     []byte                 `protobuf:"bytes,4,opt,name=event_type,json=eventType,proto3" json:"event_type,omitempty"`
+	Priority      uint32                 `protobuf:"varint,5,opt,name=priority,proto3" json:"priority,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdLogRecord) Reset() {
+	*x = AdLogRecord{}
+	mi := &file_api_proto_events_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdLogRecord) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdLogRecord) ProtoMessage() {}
+
+func (x *AdLogRecord) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_events_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdLogRecord.ProtoReflect.Descriptor instead.
+func (*AdLogRecord) Descriptor() ([]byte, []int) {
+	return file_api_proto_events_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AdLogRecord) GetTimestampUnix() int64 {
+	if x != nil {
+		return x.TimestampUnix
+	}
+	return 0
+}
+
+func (x *AdLogRecord) GetCampaignId() []byte {
+	if x != nil {
+		return x.CampaignId
+	}
+	return nil
+}
+
+func (x *AdLogRecord) GetClickId() []byte {
+	if x != nil {
+		return x.ClickId
+	}
+	return nil
+}
+
+func (x *AdLogRecord) GetEventType() []byte {
+	if x != nil {
+		return x.EventType
+	}
+	return nil
+}
+
+func (x *AdLogRecord) GetPriority() uint32 {
+	if x != nil {
+		return x.Priority
+	}
+	return 0
+}
+
 var File_api_proto_events_proto protoreflect.FileDescriptor
 
 const file_api_proto_events_proto_rawDesc = "" +
@@ -440,7 +516,15 @@ const file_api_proto_events_proto_rawDesc = "" +
 	"\x0efailed_at_unix\x18\x04 \x01(\x03R\ffailedAtUnix\x12\x1b\n" +
 	"\tworker_id\x18\x05 \x01(\fR\bworkerId\x12\x1f\n" +
 	"\vretry_count\x18\x06 \x01(\x05R\n" +
-	"retryCountB<Z:github.com/mykhailov-ua/ad-event-processor/internal/ads/pbb\x06proto3"
+	"retryCount\"\xab\x01\n" +
+	"\vAdLogRecord\x12%\n" +
+	"\x0etimestamp_unix\x18\x01 \x01(\x03R\rtimestampUnix\x12\x1f\n" +
+	"\vcampaign_id\x18\x02 \x01(\fR\n" +
+	"campaignId\x12\x19\n" +
+	"\bclick_id\x18\x03 \x01(\fR\aclickId\x12\x1d\n" +
+	"\n" +
+	"event_type\x18\x04 \x01(\fR\teventType\x12\x1a\n" +
+	"\bpriority\x18\x05 \x01(\rR\bpriorityB<Z:github.com/mykhailov-ua/ad-event-processor/internal/ads/pbb\x06proto3"
 
 var (
 	file_api_proto_events_proto_rawDescOnce sync.Once
@@ -454,18 +538,19 @@ func file_api_proto_events_proto_rawDescGZIP() []byte {
 	return file_api_proto_events_proto_rawDescData
 }
 
-var file_api_proto_events_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_api_proto_events_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_api_proto_events_proto_goTypes = []any{
 	(*AdEvent)(nil),       // 0: ads.v1.AdEvent
 	(*EventMetadata)(nil), // 1: ads.v1.EventMetadata
 	(*TrackResponse)(nil), // 2: ads.v1.TrackResponse
 	(*AdStreamEvent)(nil), // 3: ads.v1.AdStreamEvent
 	(*AdDLQEvent)(nil),    // 4: ads.v1.AdDLQEvent
-	nil,                   // 5: ads.v1.EventMetadata.ExtraEntry
+	(*AdLogRecord)(nil),   // 5: ads.v1.AdLogRecord
+	nil,                   // 6: ads.v1.EventMetadata.ExtraEntry
 }
 var file_api_proto_events_proto_depIdxs = []int32{
 	1, // 0: ads.v1.AdEvent.metadata:type_name -> ads.v1.EventMetadata
-	5, // 1: ads.v1.EventMetadata.extra:type_name -> ads.v1.EventMetadata.ExtraEntry
+	6, // 1: ads.v1.EventMetadata.extra:type_name -> ads.v1.EventMetadata.ExtraEntry
 	3, // 2: ads.v1.AdDLQEvent.original_event:type_name -> ads.v1.AdStreamEvent
 	3, // [3:3] is the sub-list for method output_type
 	3, // [3:3] is the sub-list for method input_type
@@ -485,7 +570,7 @@ func file_api_proto_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_events_proto_rawDesc), len(file_api_proto_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

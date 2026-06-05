@@ -2,7 +2,7 @@
 // outbox_events and applies their side-effects to Redis (budget key creation,
 // campaign settings publication, brand frequency cap updates). The worker uses
 // PostgreSQL LISTEN on outbox_channel for real-time notifications, with a
-// 5×interval ticker as a safety fallback for missed notifications.
+// 5x interval ticker as a safety fallback for missed notifications.
 //
 // Processing protocol:
 //  1. BEGIN, SELECT ... FOR UPDATE SKIP LOCKED (up to 100 rows).

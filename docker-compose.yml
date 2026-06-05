@@ -357,9 +357,9 @@ services:
     ports:
       - "${DB_PORT}:${DB_PORT}"
     command:
-      # max_connections: sized for 4 tracker replicas × 4 conns + processor × 16 + management + auth headroom
+      # max_connections: sized for 4 tracker replicas x 4 conns + processor x 16 + management + auth headroom
       # shared_buffers: ~25% of container memory limit (2G)
-      # work_mem: per-sort/hash allocation; 64MB per connection × 600 connections worst case = 38G virtual
+      # work_mem: per-sort/hash allocation; 64MB per connection x 600 connections worst case = 38G virtual
       # maintenance_work_mem: index builds and vacuum
       # effective_cache_size: planner assumption for page cache; ~75% of container memory
       ["postgres", "-p", "${DB_PORT}", "-c", "max_connections=600", "-c", "shared_buffers=1GB", "-c", "work_mem=64MB", "-c", "maintenance_work_mem=256MB", "-c", "effective_cache_size=3GB"]

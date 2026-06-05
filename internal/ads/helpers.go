@@ -15,7 +15,7 @@
 //     to length 0 (retaining capacity); Clear nils them (releases backing arrays).
 //     Use DeepReset when the struct will be immediately reused, Clear before Put.
 //
-//   - UnsafeString / UnsafeBytes: unsafe string↔[]byte conversions with zero copy.
+//   - UnsafeString / UnsafeBytes: unsafe string <-> []byte conversions with zero copy.
 //     The caller guarantees the backing memory outlives the returned value.
 package ads
 

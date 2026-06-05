@@ -6,7 +6,7 @@
 //
 // If drift exceeds driftLimit, a structured CRITICAL warning is emitted and the
 // ad_reconciliation_drift_ratio gauge is updated. The ClickHouse query uses a lag
-// offset (typically 5–10 minutes) to account for batched writes and replication lag
+// offset (typically 5-10 minutes) to account for batched writes and replication lag
 // before the aggregates are considered stable.
 //
 // ReconciliationWorker does not auto-correct spend totals; it is a read-only

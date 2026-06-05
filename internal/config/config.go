@@ -5,7 +5,7 @@
 //
 // Monetary values (ClickAmount, ImpressionAmount, AutoscaleShiftAmount, etc.)
 // are stored as int64 micro-units (1 unit = 0.000001 currency) parsed by
-// getEnvMicro via float×1_000_000 conversion. All budget math in the ads package
+// getEnvMicro via float x 1_000_000 conversion. All budget math in the ads package
 // operates in micro-units to avoid floating-point rounding errors.
 //
 // Secret wraps sensitive string fields and masks their value in slog output via
@@ -113,12 +113,14 @@ type Config struct {
 	}
 
 	Logger struct {
-		Dir            string
-		Shards         int
-		FlushSizeKB    int
-		RotateSizeMB   int
-		RotateInterval time.Duration
-		LatencyLimit   time.Duration
+		Dir                   string
+		Shards                int
+		FlushSizeKB           int
+		RotateSizeMB          int
+		RotateInterval        time.Duration
+		LatencyLimit          time.Duration
+		PersistQueueDepth     int
+		PersistEnqueueTimeout time.Duration
 	}
 }
 
@@ -242,6 +244,8 @@ func Load() (*Config, error) {
 	cfg.Logger.RotateSizeMB = getEnvInt("LOGGER_ROTATE_SIZE_MB", 512)
 	cfg.Logger.RotateInterval = time.Duration(getEnvInt("LOGGER_ROTATE_INTERVAL_MIN", 60)) * time.Minute
 	cfg.Logger.LatencyLimit = time.Duration(getEnvInt("LOGGER_LATENCY_LIMIT_MS", 100)) * time.Millisecond
+	cfg.Logger.PersistQueueDepth = getEnvInt("LOGGER_PERSIST_QUEUE_DEPTH", 0)
+	cfg.Logger.PersistEnqueueTimeout = time.Duration(getEnvInt("LOGGER_PERSIST_ENQUEUE_TIMEOUT_MS", 25)) * time.Millisecond
 
 	if len(cfg.AllowedOrigins) == 1 && cfg.AllowedOrigins[0] == "" {
 		cfg.AllowedOrigins = []string{"https://dashboard.example.com", "http://localhost:8188"}

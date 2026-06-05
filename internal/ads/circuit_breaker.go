@@ -1,10 +1,10 @@
 // Package ads provides a mutex-guarded circuit breaker with per-worker failure
 // counting. State transitions follow the standard three-state model:
 //
-//	Closed  → (failure count ≥ threshold per worker)  → Open
-//	Open    → (openTimeout elapsed, first Allow call)  → HalfOpen
-//	HalfOpen → (RecordSuccess)  → Closed
-//	HalfOpen → (RecordFailure or RecordCancellation)  → Open
+//	Closed  -> (failure count >= threshold per worker)  -> Open
+//	Open    -> (openTimeout elapsed, first Allow call)  -> HalfOpen
+//	HalfOpen -> (RecordSuccess)  -> Closed
+//	HalfOpen -> (RecordFailure or RecordCancellation)  -> Open
 //
 // Unlike the lock-free RedisBreaker in the database package, this implementation
 // tracks failure counts at per-worker granularity to allow heterogeneous worker
@@ -66,7 +66,7 @@ func NewCircuitBreaker(failThreshold int, openTimeout time.Duration) *CircuitBre
 // Allow returns true if the breaker permits the caller to attempt a downstream
 // operation. In the Open state it returns true only once openTimeout has elapsed,
 // simultaneously transitioning to HalfOpen to probe recovery. Concurrent callers
-// during the Open→HalfOpen transition all read the same state change because the
+// during the Open->HalfOpen transition all read the same state change because the
 // state assignment and Allow check share the same mutex.
 func (cb *CircuitBreaker) Allow() bool {
 	cb.mu.Lock()

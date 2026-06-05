@@ -3,7 +3,7 @@
 // ingestion pipeline. Two server backends co-exist: a standard net/http mux (NewRouter)
 // used by the test harness and the management plane, and a lock-free gnet event-loop
 // handler (AdsPacketHandler) used in production. The gnet path bypasses the Go HTTP
-// server entirely — inbound TCP data is parsed with a zero-alloc hand-written HTTP/1.1
+// server entirely - inbound TCP data is parsed with a zero-alloc hand-written HTTP/1.1
 // parser, event state is stored in connection-scoped connContext structs attached to
 // each gnet.Conn, and responses are written as pre-built byte literals or assembled
 // in-place into per-connection slices to avoid the heap pressure of http.ResponseWriter.
@@ -11,7 +11,7 @@
 // All allocation-heavy objects (pb.AdEvent, pb.TrackResponse, TrackRequest, fraud value
 // slices, response byte buffers) are managed via sync.Pool with double-indirection
 // pointer pattern (*[]byte, *[]any) to prevent per-call allocations on the hot path.
-// See docs/architecture.md §Tracker and docs/development.md §Pool conventions.
+// See docs/architecture.md Tracker section and docs/development.md Pool conventions section.
 package ads
 
 import (
@@ -880,7 +880,7 @@ func (h *AdsPacketHandler) OnTraffic(c gnet.Conn) (action gnet.Action) {
 }
 
 // parsedHTTPRequest holds byte-slice references into the gnet inbound ring buffer.
-// All fields are slices of the original buffer — no copies are made during header
+// All fields are slices of the original buffer - no copies are made during header
 // parsing. Callers must not retain these slices past the scope of a single React call
 // because Discard will advance the ring-buffer read pointer, invalidating the memory.
 type parsedHTTPRequest struct {
@@ -1309,24 +1309,40 @@ func (h *AdsPacketHandler) React(req parsedHTTPRequest, c gnet.Conn) gnet.Action
 
 	metrics.FilterDecisions.WithLabelValues("accepted").Inc()
 	if h.logger != nil {
+		rec := adLogRecordPool.Get().(*pb.AdLogRecord)
+		rec.TimestampUnix = start.Unix()
+		if cap(rec.CampaignId) < 16 {
+			rec.CampaignId = make([]byte, 16)
+		} else {
+			rec.CampaignId = rec.CampaignId[:16]
+		}
+		copy(rec.CampaignId, campaignID[:])
+		rec.ClickId = UnsafeBytes(clickID)
+		rec.EventType = UnsafeBytes(eventType)
+		rec.Priority = 0
+
+		size := rec.SizeVT()
 		bufPtr := logBufPool.Get().(*[]byte)
-		buf := (*bufPtr)[:0]
-		wTime := &ctx.wTime
-		wTime.buf = wTime.buf[:0]
-		wTime.buf = start.AppendFormat(wTime.buf, time.RFC3339)
-		timeStr := unsafeString(wTime.buf)
-		buf = append(buf, `{"level":"info","timestamp":"`...)
-		buf = append(buf, timeStr...)
-		buf = append(buf, `","msg":"click tracked successfully","campaign_id":"`...)
-		buf = appendUUID(buf, campaignID)
-		buf = append(buf, `","click_id":"`...)
-		buf = append(buf, clickID...)
-		buf = append(buf, `","type":"`...)
-		buf = append(buf, eventType...)
-		buf = append(buf, `","priority":0}`...)
-		h.logger.WriteToShard(ctx.shardID, 0, buf)
+		buf := *bufPtr
+		if cap(buf) < size {
+			buf = make([]byte, size)
+		} else {
+			buf = buf[:size]
+		}
+
+		n, err := rec.MarshalToSizedBufferVT(buf)
+		if err == nil {
+			h.logger.WriteToShard(ctx.shardID, 0, buf[:n])
+		}
 		*bufPtr = buf
 		logBufPool.Put(bufPtr)
+
+		campIDSaved := rec.CampaignId
+		rec.Reset()
+		if cap(campIDSaved) >= 16 {
+			rec.CampaignId = campIDSaved[:0]
+		}
+		adLogRecordPool.Put(rec)
 	}
 	h.writeGnetTrackAccepted(ctx, req, c, start, wReqID, requestIDStr)
 	return gnet.None

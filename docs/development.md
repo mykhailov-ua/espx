@@ -73,14 +73,14 @@ Manages the Redis Dead Letter Queue (DLQ).
     Extracts events from Redis DLQ, serializes them as length-prefixed `AdDLQEvent` Protobuf segments, writes to disk, and acknowledges the entries in Redis.
 *   **Restore events from disk**:
     ```bash
-    go run cmd/dlq.go -action=restore -dest=dlq_archive.bin -stream=ad:events -batch=1000
+    go run cmd/dlq.go -action=restore -dest=dlq_archive.bin -stream=ad:events -batch=1000 -rate=200
     ```
-    Deserializes events from disk and writes them to the Redis ingestion stream (`ad:events`).
+    Deserializes events from disk and writes them to the Redis ingestion stream (`ad:events`). The optional `-rate` parameter defines a rate limit (events/second) to prevent overwhelming the target stream; default is `0` (unlimited).
 *   **Requeue directly**:
     ```bash
-    go run cmd/dlq.go -action=requeue -stream=ad:events:dlq -dest=ad:events -batch=1000
+    go run cmd/dlq.go -action=requeue -stream=ad:events:dlq -dest=ad:events -batch=1000 -rate=500
     ```
-    Moves events from the Redis DLQ to the active ingestion queue.
+    Moves events from the Redis DLQ to the active ingestion queue. An optional rate limit can be set via `-rate` (events/second) to control the flow.
 
 ---
 

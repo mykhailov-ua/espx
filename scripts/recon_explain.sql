@@ -5,7 +5,7 @@ INSERT INTO recon_runs (period_start, period_end, status, total_delta, campaigns
 VALUES (NOW() - INTERVAL '3 hours', NOW() - INTERVAL '2 hours', 'COMPLETED', 123456789, 4821, 17)
 ON CONFLICT DO NOTHING;
 
--- Core hot path—ReconcileWindow windowed aggregate (see index expectations below)
+-- Core hot path - ReconcileWindow windowed aggregate (see index expectations below)
 EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
 SELECT 
     campaign_id,

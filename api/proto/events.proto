@@ -1,4 +1,4 @@
-syntax = "proto3";
+  syntax = "proto3";
 
 package ads.v1;
 
@@ -41,4 +41,12 @@ message AdDLQEvent {
   int64 failed_at_unix = 4;
   bytes worker_id = 5;
   int32 retry_count = 6;
+}
+
+message AdLogRecord {
+  int64 timestamp_unix = 1;
+  bytes campaign_id = 2;
+  bytes click_id = 3;
+  bytes event_type = 4;
+  uint32 priority = 5;
 }

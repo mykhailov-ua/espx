@@ -38,17 +38,19 @@ func main() {
 	}
 
 	loggerCfg := logger.Config{
-		LogDir:           cfg.Logger.Dir,
-		FlushBufferSize:  cfg.Logger.FlushSizeKB * 1024,
-		RotateSize:       int64(cfg.Logger.RotateSizeMB) * 1024 * 1024,
-		RotateInterval:   cfg.Logger.RotateInterval,
-		DiskLatencyLimit: cfg.Logger.LatencyLimit,
+		LogDir:                cfg.Logger.Dir,
+		FlushBufferSize:       cfg.Logger.FlushSizeKB * 1024,
+		RotateSize:            int64(cfg.Logger.RotateSizeMB) * 1024 * 1024,
+		RotateInterval:        cfg.Logger.RotateInterval,
+		DiskLatencyLimit:      cfg.Logger.LatencyLimit,
+		PersistQueueDepth:     cfg.Logger.PersistQueueDepth,
+		PersistEnqueueTimeout: cfg.Logger.PersistEnqueueTimeout,
 	}
 	appLogger := logger.NewLogger(loggerCfg, cfg.Logger.Shards)
 	defer appLogger.Close()
 
 	logger.RegisterMetrics()
-	go appLogger.StartMetricsReporter(15 * time.Second)
+	appLogger.StartMetricsReporter(15 * time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

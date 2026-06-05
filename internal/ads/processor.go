@@ -11,7 +11,7 @@
 // consumers after streamMinIdle, preventing PEL (Pending Entry List) accumulation.
 // The dlqMonitor goroutine samples XLen every 15 s to keep the DLQ Prometheus gauge
 // current. All goroutines check ctx.Done() on every iteration; shutdown drains any
-// buffered batch before returning. See docs/architecture.md §Processor.
+// buffered batch before returning. See docs/architecture.md Processor section.
 package ads
 
 import (
@@ -72,10 +72,16 @@ var logBufPool = sync.Pool{
 	},
 }
 
+var adLogRecordPool = sync.Pool{
+	New: func() any {
+		return &pb.AdLogRecord{}
+	},
+}
+
 // NewStreamConsumer constructs a StreamConsumer and derives a globally unique
 // consumerID by combining the provided base ID, the OS hostname, and a random UUID
 // suffix to prevent PEL conflicts when multiple processor replicas share the same
-// configuration. The CircuitBreaker is initialized with a timeout of 2×retryMaxWait.
+// configuration. The CircuitBreaker is initialized with a timeout of 2x retryMaxWait.
 func NewStreamConsumer(
 	store domain.EventStore,
 	rdb redis.UniversalClient,
@@ -709,20 +715,40 @@ func (p *StreamConsumer) flushBatch(ctx context.Context, batch []*domain.Event, 
 			}
 		}
 		for _, e := range batch {
+			rec := adLogRecordPool.Get().(*pb.AdLogRecord)
+			rec.TimestampUnix = e.CreatedAt.Unix()
+			if cap(rec.CampaignId) < 16 {
+				rec.CampaignId = make([]byte, 16)
+			} else {
+				rec.CampaignId = rec.CampaignId[:16]
+			}
+			copy(rec.CampaignId, e.CampaignID[:])
+			rec.ClickId = UnsafeBytes(e.ClickID)
+			rec.EventType = UnsafeBytes(e.Type)
+			rec.Priority = 0
+
+			size := rec.SizeVT()
 			bufPtr := logBufPool.Get().(*[]byte)
-			buf := (*bufPtr)[:0]
-			buf = append(buf, `{"level":"info","timestamp":"`...)
-			buf = e.CreatedAt.AppendFormat(buf, time.RFC3339)
-			buf = append(buf, `","msg":"event successfully processed","campaign_id":"`...)
-			buf = appendUUID(buf, e.CampaignID)
-			buf = append(buf, `","click_id":"`...)
-			buf = append(buf, e.ClickID...)
-			buf = append(buf, `","type":"`...)
-			buf = append(buf, e.Type...)
-			buf = append(buf, `","priority":0}`...)
-			p.logger.WriteToShard(workerIdx, 0, buf)
+			buf := *bufPtr
+			if cap(buf) < size {
+				buf = make([]byte, size)
+			} else {
+				buf = buf[:size]
+			}
+
+			n, err := rec.MarshalToSizedBufferVT(buf)
+			if err == nil {
+				p.logger.WriteToShard(workerIdx, 0, buf[:n])
+			}
 			*bufPtr = buf
 			logBufPool.Put(bufPtr)
+
+			campIDSaved := rec.CampaignId
+			rec.Reset()
+			if cap(campIDSaved) >= 16 {
+				rec.CampaignId = campIDSaved[:0]
+			}
+			adLogRecordPool.Put(rec)
 		}
 	}
 

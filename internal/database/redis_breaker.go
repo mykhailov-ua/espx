@@ -48,7 +48,7 @@ func (s CircuitState) String() string {
 
 // RedisBreaker is a lock-free circuit breaker for Redis clients. All fields are
 // accessed exclusively via sync/atomic; no mutex is held during Allow, RecordSuccess,
-// or RecordFailure. State transitions from Open→HalfOpen use CompareAndSwap to
+// or RecordFailure. State transitions from Open -> HalfOpen use CompareAndSwap to
 // prevent multiple goroutines from entering HalfOpen simultaneously.
 type RedisBreaker struct {
 	state            int32
@@ -79,6 +79,10 @@ func (b *RedisBreaker) State() CircuitState {
 func (b *RedisBreaker) Allow() bool {
 	state := atomic.LoadInt32(&b.state)
 	if state == int32(CircuitClosed) {
+		return true
+	}
+
+	if state == int32(CircuitHalfOpen) {
 		return true
 	}
 
@@ -127,8 +131,16 @@ func (b *RedisBreaker) RecordFailure() {
 }
 
 func (b *RedisBreaker) trip() {
-	atomic.StoreInt64(&b.lastOpenedUnix, time.Now().UnixNano())
-	atomic.StoreInt32(&b.state, int32(CircuitOpen))
+	for {
+		state := atomic.LoadInt32(&b.state)
+		if state == int32(CircuitOpen) {
+			return
+		}
+		if atomic.CompareAndSwapInt32(&b.state, state, int32(CircuitOpen)) {
+			atomic.StoreInt64(&b.lastOpenedUnix, time.Now().UnixNano())
+			return
+		}
+	}
 }
 
 func IsNetworkOrSystemError(err error) bool {

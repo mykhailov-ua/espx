@@ -39,7 +39,7 @@ type DynamicConfig struct {
 // atomic DynamicConfig snapshot. The currentVersion field is read and written
 // with atomic operations even though it is also accessed under no lock, because
 // the snapshot swap and the version store are not required to be atomic with each
-// other — a reader may briefly see a version N+1 snapshot with version N stored,
+// other - a reader may briefly see a version N+1 snapshot with version N stored,
 // which is harmless.
 type SettingsWatcher struct {
 	rdb            redis.UniversalClient

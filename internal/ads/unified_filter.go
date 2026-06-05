@@ -5,8 +5,8 @@
 // script path is O(1) with respect to campaign count; all keys are computed
 // on the call site from pooled byte buffers to eliminate heap allocation.
 //
-// Execution order: EmergencyBreaker → IPRateLimit → Duplicate → Geo →
-// UnifiedFilter (budget + pacing + fcap in Lua) → Fraud.
+// Execution order: EmergencyBreaker -> IPRateLimit -> Duplicate -> Geo ->
+// UnifiedFilter (budget + pacing + fcap in Lua) -> Fraud.
 // Stopping on first error avoids unnecessary Redis round-trips for events
 // that are already invalid.
 package ads

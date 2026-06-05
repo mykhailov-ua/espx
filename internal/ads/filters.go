@@ -102,7 +102,7 @@ var timestampPool = sync.Pool{
 // For impression events it stores a Unix-ms timestamp in Redis under a per-user+campaign
 // key with a 10-minute TTL. For click events it reads that timestamp and computes the
 // delta; if delta < ttcMin the click is annotated with a fraud reason string in
-// evt.FraudReason (not rejected — the event is still forwarded to the fraud stream
+// evt.FraudReason (not rejected - the event is still forwarded to the fraud stream
 // for later analysis). Datacenter IP detection rejects the event immediately.
 type FraudFilter struct {
 	geo    GeoProvider
