@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  haproxy:
+    image: haproxy:2.8-alpine
+    ports:
+      - "9092:9092"
+      - "1936:1936"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      - broker-1
+      - broker-2
+
+  broker-1:
+    image: alpine:latest
+    command: ["/app/espx-broker", "-addr", "0.0.0.0:9092", "-health-addr", "0.0.0.0:8081", "-data-dir", "/data", "-node-id", "broker-1", "-redis-url", "redis://redis:6379/0"]
+    volumes:
+      - ../../espx-broker:/app/espx-broker:ro
+      - broker-1-data:/data
+    ports:
+      - "9093:9092"
+      - "8081:8081"
+    depends_on:
+      - redis
+
+  broker-2:
+    image: alpine:latest
+    command: ["/app/espx-broker", "-addr", "0.0.0.0:9092", "-health-addr", "0.0.0.0:8081", "-data-dir", "/data", "-node-id", "broker-2", "-redis-url", "redis://redis:6379/0"]
+    volumes:
+      - ../../espx-broker:/app/espx-broker:ro
+      - broker-2-data:/data
+    ports:
+      - "9094:9092"
+      - "8082:8081"
+    depends_on:
+      - redis
+
+volumes:
+  broker-1-data:
+  broker-2-data:
