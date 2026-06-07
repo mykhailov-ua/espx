@@ -24,7 +24,7 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      test: ["CMD", "--health-probe", "http://127.0.0.1:8181/health"]
+      test: ["CMD", "/tracker", "--health-probe", "http://127.0.0.1:8181/health"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -75,7 +75,7 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      test: ["CMD", "--health-probe", "http://127.0.0.1:8182/health"]
+      test: ["CMD", "/tracker", "--health-probe", "http://127.0.0.1:8182/health"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -126,7 +126,7 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      test: ["CMD", "--health-probe", "http://127.0.0.1:8183/health"]
+      test: ["CMD", "/tracker", "--health-probe", "http://127.0.0.1:8183/health"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -177,7 +177,7 @@ services:
         limits:
           memory: 1G
     healthcheck:
-      test: ["CMD", "--health-probe", "http://127.0.0.1:8184/health"]
+      test: ["CMD", "/tracker", "--health-probe", "http://127.0.0.1:8184/health"]
       interval: 5s
       timeout: 3s
       retries: 3
@@ -260,7 +260,7 @@ services:
       - GOMEMLIMIT=1500MiB  # processor holds larger in-flight batches; needs wider heap
       - GOGC=100            # standard GC pace; processor is not latency-critical
     healthcheck:
-      test: ["CMD", "--health-probe", "http://127.0.0.1:8186/health"]
+      test: ["CMD", "/processor", "--health-probe", "http://127.0.0.1:8186/health"]
       interval: 10s
       timeout: 5s
       retries: 3
