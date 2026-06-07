@@ -2,7 +2,7 @@
 
 package ads.v1;
 
-option go_package = "github.com/mykhailov-ua/ad-event-processor/internal/ads/pb";
+option go_package = "espx/internal/ads/pb";
 
 message AdEvent {
   bytes campaign_id = 1;

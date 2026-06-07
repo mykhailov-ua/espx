@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"espx/internal/ads/db"
+	"espx/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

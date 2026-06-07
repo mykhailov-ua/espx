@@ -12,11 +12,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"espx/internal/auth"
+	"espx/internal/auth/db"
+	"espx/internal/auth/pb"
+	"espx/internal/config"
+	"espx/internal/database"
 	google_grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )

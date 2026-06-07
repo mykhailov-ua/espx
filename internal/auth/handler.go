@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
+	"espx/internal/auth/pb"
 )
 
 import (
@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 
+	"espx/internal/config"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"

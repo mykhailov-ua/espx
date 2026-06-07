@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"espx/internal/ads"
+	"espx/internal/ads/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 )
 
 type BrandDTO struct {

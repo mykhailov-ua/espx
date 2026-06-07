@@ -524,7 +524,7 @@ const file_api_proto_events_proto_rawDesc = "" +
 	"\bclick_id\x18\x03 \x01(\fR\aclickId\x12\x1d\n" +
 	"\n" +
 	"event_type\x18\x04 \x01(\fR\teventType\x12\x1a\n" +
-	"\bpriority\x18\x05 \x01(\rR\bpriorityB<Z:github.com/mykhailov-ua/ad-event-processor/internal/ads/pbb\x06proto3"
+	"\bpriority\x18\x05 \x01(\rR\bpriorityB\x16Z\x14espx/internal/ads/pbb\x06proto3"
 
 var (
 	file_api_proto_events_proto_rawDescOnce sync.Once

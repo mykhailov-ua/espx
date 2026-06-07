@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/domain"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

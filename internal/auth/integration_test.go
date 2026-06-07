@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/auth/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

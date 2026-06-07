@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"espx/internal/auth"
+	"espx/internal/config"
+	"espx/pkg/httpresponse"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"github.com/redis/go-redis/v9"
 )
 

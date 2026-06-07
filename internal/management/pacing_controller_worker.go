@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
+	"espx/internal/ads"
 )
 
 type PacingControllerWorker struct {

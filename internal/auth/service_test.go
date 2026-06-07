@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/auth/db"
+	"espx/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/stretchr/testify/assert"
 )
 

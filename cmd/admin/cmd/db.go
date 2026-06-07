@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
+	adsdb "espx/internal/ads/db"
+	"espx/internal/auth"
+	authdb "espx/internal/auth/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	adsdb "github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
-	authdb "github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
 	"github.com/spf13/cobra"
 )
 

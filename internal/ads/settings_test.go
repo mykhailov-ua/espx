@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
+	"espx/internal/config"
+	"espx/internal/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

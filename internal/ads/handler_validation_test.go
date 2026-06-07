@@ -5,7 +5,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
+	"espx/internal/config"
 	"github.com/panjf2000/gnet/v2"
 	"github.com/stretchr/testify/assert"
 )

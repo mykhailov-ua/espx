@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
+	"espx/internal/ads"
+	"espx/internal/ads/db"
+	"espx/internal/config"
+	"espx/internal/database"
+	"espx/pkg/logger"
 	"fmt"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
-	"github.com/mykhailov-ua/ad-event-processor/pkg/logger"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 )

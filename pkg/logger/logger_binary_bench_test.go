@@ -7,8 +7,8 @@ import (
 	"time"
 	"unsafe"
 
+	"espx/internal/ads/pb"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
 )
 
 type JSONLogRecord struct {

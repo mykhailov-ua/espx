@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"espx/internal/ads/db"
+	"espx/internal/config"
+	"espx/pkg/httpresponse"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"golang.org/x/time/rate"
 )
 

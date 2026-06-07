@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mykhailov-ua/ad-event-processor/cmd/admin/cmd"
+	"espx/cmd/admin/cmd"
 )
 
 func main() {

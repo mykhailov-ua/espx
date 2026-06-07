@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
+	"espx/internal/ads/db"
+	"espx/internal/domain"
+	"espx/internal/metrics"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 )
 
 type postgresBatchArrays struct {

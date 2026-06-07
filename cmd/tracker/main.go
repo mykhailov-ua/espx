@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
-	"github.com/mykhailov-ua/ad-event-processor/pkg/logger"
+	"espx/internal/ads"
+	"espx/internal/ads/db"
+	"espx/internal/config"
+	"espx/internal/database"
+	"espx/internal/metrics"
+	"espx/pkg/logger"
 	"github.com/panjf2000/gnet/v2"
 	"github.com/redis/go-redis/v9"
 )

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/auth/db"
+	"espx/internal/config"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc/metadata"

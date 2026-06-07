@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"espx/internal/domain"
+	"espx/internal/metrics"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 )
 
 var slicePool = sync.Pool{

@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/auth"
+	"espx/internal/auth/pb"
+	"espx/internal/config"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

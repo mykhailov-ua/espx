@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	adsdb "espx/internal/ads/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	adsdb "github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/spf13/cobra"
 )
 

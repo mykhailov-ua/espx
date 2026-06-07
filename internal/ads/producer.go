@@ -16,10 +16,10 @@ import (
 	"sync"
 	"time"
 
+	"espx/internal/ads/pb"
+	"espx/internal/domain"
+	"espx/internal/metrics"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
 )
 

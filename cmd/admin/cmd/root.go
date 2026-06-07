@@ -8,10 +8,10 @@ import (
 	"os"
 	"strings"
 
+	"espx/internal/ads"
+	"espx/internal/config"
+	"espx/internal/database"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 )

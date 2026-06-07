@@ -1,4 +1,4 @@
-module github.com/mykhailov-ua/ad-event-processor
+module espx
 
 go 1.25.7
 

@@ -17,8 +17,8 @@ import (
 	"time"
 	"unsafe"
 
+	"espx/internal/domain"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	redis "github.com/redis/go-redis/v9"
 )
 

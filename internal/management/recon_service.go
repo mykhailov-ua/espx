@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"time"
 
+	"espx/internal/ads"
+	"espx/internal/metrics"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
 )
 

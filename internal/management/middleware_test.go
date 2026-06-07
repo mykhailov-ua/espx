@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/auth"
+	"espx/internal/config"
+	"espx/internal/database"
+	"espx/pkg/httpresponse"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/database"
-	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

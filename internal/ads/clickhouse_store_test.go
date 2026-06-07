@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/domain"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 	"github.com/stretchr/testify/assert"
 )
 

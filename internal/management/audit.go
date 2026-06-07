@@ -3,13 +3,13 @@ package management
 import (
 	"context"
 	"encoding/json"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
+	"espx/internal/ads/db"
 	"log/slog"
 	"time"
 
+	"espx/internal/ads"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads"
 )
 
 func (s *Service) AuditLog(ctx context.Context, q db.Querier, adminID uuid.UUID, action string, targetType string, targetID *uuid.UUID, changes any, metadata any) {

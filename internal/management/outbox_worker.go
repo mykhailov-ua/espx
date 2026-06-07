@@ -23,10 +23,10 @@ import (
 	"strings"
 	"time"
 
+	"espx/internal/ads/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 	"github.com/redis/go-redis/v9"
 )
 

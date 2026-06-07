@@ -1197,7 +1197,7 @@ const file_api_proto_auth_proto_rawDesc = "" +
 	"\vListAPIKeys\x12\x18.auth.ListAPIKeysRequest\x1a\x19.auth.ListAPIKeysResponse\x12K\n" +
 	"\x0eChangePassword\x12\x1b.auth.ChangePasswordRequest\x1a\x1c.auth.ChangePasswordResponse\x12i\n" +
 	"\x18RequestEmailVerification\x12%.auth.RequestEmailVerificationRequest\x1a&.auth.RequestEmailVerificationResponse\x12i\n" +
-	"\x18ConfirmEmailVerification\x12%.auth.ConfirmEmailVerificationRequest\x1a&.auth.ConfirmEmailVerificationResponseB=Z;github.com/mykhailov-ua/ad-event-processor/internal/auth/pbb\x06proto3"
+	"\x18ConfirmEmailVerification\x12%.auth.ConfirmEmailVerificationRequest\x1a&.auth.ConfirmEmailVerificationResponseB\x17Z\x15espx/internal/auth/pbb\x06proto3"
 
 var (
 	file_api_proto_auth_proto_rawDescOnce sync.Once

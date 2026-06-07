@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"espx/internal/auth/db"
+	"espx/internal/auth/pb"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/db"
-	"github.com/mykhailov-ua/ad-event-processor/internal/auth/pb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/types/known/timestamppb"

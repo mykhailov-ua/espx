@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/mykhailov-ua/ad-event-processor/pkg/httpresponse"
+	"espx/pkg/httpresponse"
 )
 
 func GenerateSecureToken(length int) (string, error) {

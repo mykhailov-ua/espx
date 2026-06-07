@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mykhailov-ua/ad-event-processor/pkg/broker/server"
+	"espx/pkg/broker/server"
 )
 
 func main() {

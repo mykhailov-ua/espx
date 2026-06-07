@@ -20,8 +20,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
+	"espx/internal/domain"
+	"espx/internal/metrics"
 )
 
 // ReconciliationWorker compares PostgreSQL and ClickHouse spend per active campaign.

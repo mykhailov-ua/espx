@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
+	"espx/internal/domain"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
+	"espx/internal/ads/db"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/db"
 )
 
 type CreditScoringWorker struct {

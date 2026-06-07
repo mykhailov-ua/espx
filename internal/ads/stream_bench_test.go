@@ -7,9 +7,9 @@ import (
 	"time"
 	"unsafe"
 
+	"espx/internal/ads/pb"
+	"espx/internal/domain"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
 )
 
 func BenchmarkStreamWriteFlat(b *testing.B) {

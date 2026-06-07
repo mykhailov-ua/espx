@@ -26,8 +26,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
+	"espx/internal/domain"
+	"espx/internal/metrics"
 	redis "github.com/redis/go-redis/v9"
 )
 

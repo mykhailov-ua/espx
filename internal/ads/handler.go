@@ -15,7 +15,7 @@
 package ads
 
 import (
-	"github.com/mykhailov-ua/ad-event-processor/internal/ads/pb"
+	"espx/internal/ads/pb"
 )
 
 import (
@@ -34,11 +34,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"espx/internal/config"
+	"espx/internal/domain"
+	"espx/internal/metrics"
+	"espx/pkg/logger"
 	"github.com/google/uuid"
-	"github.com/mykhailov-ua/ad-event-processor/internal/config"
-	"github.com/mykhailov-ua/ad-event-processor/internal/domain"
-	"github.com/mykhailov-ua/ad-event-processor/internal/metrics"
-	"github.com/mykhailov-ua/ad-event-processor/pkg/logger"
 	"github.com/panjf2000/gnet/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
