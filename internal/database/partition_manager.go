@@ -1,17 +1,3 @@
-// Package database implements PartitionManager, which maintains the daily partitioned
-// events table. On each Run call it:
-//  1. Creates partitions for today through today+preCreateDays using CREATE TABLE IF NOT EXISTS.
-//  2. Drops partitions whose date strings fall outside [today-retentionDays, today+preCreateDays].
-//  3. Truncates events_default: data in the default partition indicates either a
-//     clock-skew event or a missing future partition; either way, data must be
-//     discarded to prevent unbounded disk growth.
-//
-// Partition names follow the pattern events_p2006_01_02 (ISO date with underscores).
-// String-comparison on the date suffix is used instead of parsing to avoid timezone
-// arithmetic; the comparison is lexicographically equivalent for the ISO format.
-//
-// StartBackground runs the first Run call synchronously on a goroutine, then repeats
-// hourly. The embedded WaitGroup allows callers to await clean shutdown.
 package database
 
 import (
@@ -31,9 +17,6 @@ type dbExecutor interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// PartitionManager creates and drops daily partitions of the events table.
-// preCreate controls how many future-day partitions are maintained ahead of the
-// current day; retention controls how many past-day partitions are kept.
 type PartitionManager struct {
 	pool      dbExecutor
 	retention int
@@ -49,10 +32,12 @@ func NewPartitionManager(pool dbExecutor, retentionDays int, preCreateDays int) 
 	}
 }
 
-// Run executes one maintenance cycle: create future partitions, drop expired
-// partitions, and truncate events_default. Returns the first non-nil error;
-// truncation errors are logged and do not abort the run.
 func (pm *PartitionManager) Run(ctx context.Context) error {
+	// Truncate events_default first; leftover rows cause partition constraint violations.
+	if err := pm.truncateDefault(ctx); err != nil {
+		slog.Warn("failed to truncate events_default before partition creation", "error", err)
+	}
+
 	now := time.Now().UTC()
 
 	for i := 0; i <= pm.preCreate; i++ {
@@ -67,10 +52,6 @@ func (pm *PartitionManager) Run(ctx context.Context) error {
 	err := pm.dropPartitions(ctx, now, dropDate)
 	if err != nil {
 		return fmt.Errorf("failed to drop partitions: %w", err)
-	}
-
-	if err := pm.truncateDefault(ctx); err != nil {
-		slog.Warn("failed to truncate events_default", "error", err)
 	}
 
 	return nil
