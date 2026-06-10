@@ -35,14 +35,9 @@ func (r *Registry) RunAuction(req *BidRequest) (AuctionResult, bool) {
 	geoHashes := reg.GeoHashes
 	budgetIndices := reg.BudgetIndices
 
-	// BCE hints.
-	if count > 0 {
-		_ = campaignIDs[count-1]
-		_ = bidFloors[count-1]
-		_ = deviceMasks[count-1]
-		_ = categoryMasks[count-1]
-		_ = geoHashes[count-1]
-		_ = budgetIndices[count-1]
+	if count > len(campaignIDs) || count > len(bidFloors) || count > len(deviceMasks) ||
+		count > len(categoryMasks) || count > len(geoHashes) || count > len(budgetIndices) {
+		return AuctionResult{}, false
 	}
 
 	var candidates [128]uint32
@@ -67,20 +62,19 @@ func (r *Registry) RunAuction(req *BidRequest) (AuctionResult, bool) {
 			continue
 		}
 
-		// Lazy heapification to defer heap construction overhead.
 		if matchedCount < 128 {
 			candidates[matchedCount] = uint32(i)
 			matchedCount++
 		} else {
 			if matchedCount == 128 {
 				for parent := 63; parent >= 0; parent-- {
-					siftDown(candidates[:128], bidFloors, parent)
+					siftDown128(&candidates, bidFloors, parent)
 				}
 				matchedCount++
 			}
 			if bid > bidFloors[candidates[0]] {
 				candidates[0] = uint32(i)
-				siftDown(candidates[:128], bidFloors, 0)
+				siftDown128(&candidates, bidFloors, 0)
 			}
 		}
 	}
@@ -98,10 +92,10 @@ func (r *Registry) RunAuction(req *BidRequest) (AuctionResult, bool) {
 	var maxBid int64 = -1
 	var secondBid int64 = -1
 
-	for _, cIdx := range candidates[:limit] {
-		if int(cIdx) >= len(bidFloors) {
-			continue
-		}
+	_ = bidFloors[len(bidFloors)-1]
+
+	for i := 0; i < limit; i++ {
+		cIdx := candidates[i]
 		bVal := bidFloors[cIdx]
 		if bVal > maxBid {
 			secondBid = maxBid
@@ -136,18 +130,34 @@ func (r *Registry) RunAuction(req *BidRequest) (AuctionResult, bool) {
 	}, true
 }
 
-func siftDown(heap []uint32, bids []int64, idx int) {
-	n := len(heap)
+func siftDown128(heap *[128]uint32, bids []int64, idx int) {
+	const n = 128
 	for {
-		left := 2*idx + 1
+		left := (idx << 1) + 1
 		right := left + 1
-		smallest := idx
-
-		if left < n && bids[heap[left]] < bids[heap[smallest]] {
-			smallest = left
+		if left >= n {
+			break
 		}
-		if right < n && bids[heap[right]] < bids[heap[smallest]] {
-			smallest = right
+		smallest := idx
+		smallestCand := heap[smallest]
+		leftCand := heap[left]
+
+		if int(smallestCand) >= len(bids) || int(leftCand) >= len(bids) {
+			break
+		}
+
+		if bids[leftCand] < bids[smallestCand] {
+			smallest = left
+			smallestCand = leftCand
+		}
+		if right < n {
+			rightCand := heap[right]
+			if int(rightCand) >= len(bids) {
+				break
+			}
+			if bids[rightCand] < bids[smallestCand] {
+				smallest = right
+			}
 		}
 		if smallest == idx {
 			break
