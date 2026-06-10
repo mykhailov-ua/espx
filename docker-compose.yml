@@ -211,6 +211,7 @@ services:
       - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6479
       - REDIS_PASS=${REDIS_PASSWORD}
+      - REDIS_ADDRS=127.0.0.1:6479,127.0.0.1:6480,127.0.0.1:6481,127.0.0.1:6482,127.0.0.1:6483,127.0.0.1:6484
     volumes:
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./deploy/nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
@@ -368,7 +369,7 @@ services:
     networks:
       - database
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -p ${DB_PORT} -U ${DB_USER}"]
+      test: ["CMD-SHELL", "pg_isready -p ${DB_PORT} -U ${DB_USER} -d ${DB_NAME}"]
       interval: ${HEALTHCHECK_INTERVAL}
       timeout: ${HEALTHCHECK_TIMEOUT}
       retries: ${HEALTHCHECK_RETRIES}
