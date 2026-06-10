@@ -88,6 +88,7 @@ func TestClickHouseStore_StoreBatch_PartialFailureDeduplication(t *testing.T) {
 	}
 
 	store := NewClickHouseStore(connMock, 100*time.Millisecond)
+	store.SetBatching(1, 0)
 
 	err := store.StoreBatch(context.Background(), batchEvents)
 	assert.Error(t, err)
