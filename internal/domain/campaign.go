@@ -1,12 +1,3 @@
-// Package domain contains the core business entities and repository interfaces
-// for the ad-event pipeline. Types in this package are shared across the ads,
-// management, and auth packages; they carry no framework dependencies.
-//
-// Campaign pre-computes several string and any-boxed fields (IDStr, IDStrAny,
-// BrandFcapKey, BudgetCampaignKey, etc.) at construction time so that the
-// filter hot path can reference them without repeated formatting. The any-typed
-// fields (DailyBudgetMicroAny, FreqLimitAny, FreqWindowAny) are pre-boxed to
-// avoid per-call interface boxing inside the Lua ARGV assembly path.
 package domain
 
 import (
@@ -31,11 +22,6 @@ const (
 	PacingModeEven PacingMode = "EVEN"
 )
 
-// Campaign holds the runtime state of a single campaign cached in the in-process
-// registry. Fields are grouped by use: UUID identifiers, pre-formatted string
-// variants for zero-alloc key assembly, budget/pacing parameters, and targeting
-// constraints. Callers must treat the struct as immutable after insertion into
-// the registry map.
 type Campaign struct {
 	ID                  uuid.UUID
 	CustomerID          uuid.UUID
@@ -77,9 +63,6 @@ type Brand struct {
 	UpdatedAt  time.Time
 }
 
-// CampaignRepository defines the persistence interface for campaign lifecycle
-// operations. UpdateSpend must be idempotent with respect to the txID argument;
-// the implementation uses INSERT INTO sync_idempotency ON CONFLICT DO NOTHING.
 type CampaignRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*Campaign, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status CampaignStatus) error
@@ -87,9 +70,6 @@ type CampaignRepository interface {
 	ListActive(ctx context.Context) ([]*Campaign, error)
 }
 
-// CampaignRegistry defines the in-process cache interface used by filter components.
-// Add inserts a campaign with its full targeting metadata; Sync refreshes the cache
-// from the database. All methods must be safe for concurrent use.
 type CampaignRegistry interface {
 	Exists(id uuid.UUID) bool
 	Add(id, customerID uuid.UUID, brandID *uuid.UUID, brandFcapKey string, pacingMode PacingMode, dailyBudget int64, timezone string, freqLimit, freqWindow int32, targetCountries []string)

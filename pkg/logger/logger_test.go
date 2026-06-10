@@ -219,7 +219,7 @@ func TestLoggerRotation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	l.WriteToShard(0, 1, data)
 	time.Sleep(100 * time.Millisecond)
-	pattern := filepath.Join(logDir, "segment_*.log.ready")
+	pattern := filepath.Join(logDir, "segment_*.log.zst.ready")
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
 		t.Fatal(err)
@@ -234,5 +234,66 @@ func TestLogPayloadSize(t *testing.T) {
 	size := unsafe.Sizeof(p)
 	if size != 512 {
 		t.Errorf("expected unsafe.Sizeof(LogPayload) to be 512, got %d", size)
+	}
+}
+
+func TestLoggerEncryptionDecryption(t *testing.T) {
+	t.Setenv("LOG_ENCRYPTION_KEY", "test-super-secret-passphrase")
+
+	logDir := t.TempDir()
+	cfg := Config{
+		LogDir:                logDir,
+		FlushBufferSize:       4096,
+		RotateSize:            1024 * 1024,
+		RotateInterval:        time.Hour,
+		DiskLatencyLimit:      time.Second,
+		PersistEnqueueTimeout: time.Second,
+	}
+
+	l := NewLogger(cfg, 1)
+
+	lines := [][]byte{
+		[]byte("first high-performance encrypted log line"),
+		[]byte("second high-performance encrypted log line"),
+		[]byte("third high-performance encrypted log line"),
+	}
+
+	for _, line := range lines {
+		ok := l.WriteToShard(0, 1, line)
+		if !ok {
+			t.Fatal("write to shard failed")
+		}
+	}
+
+	l.Close()
+
+	key := DeriveKey("test-super-secret-passphrase")
+
+	activePath := filepath.Join(logDir, "active.log")
+	decryptedBytes, err := DecryptSegment(activePath, key)
+	if err != nil {
+		t.Fatalf("failed to decrypt segment: %v", err)
+	}
+
+	data := decryptedBytes
+	for _, expectedLine := range lines {
+		if len(data) < 4 {
+			t.Fatalf("decrypted data too short, expected length prefix")
+		}
+		length := binary.BigEndian.Uint32(data[:4])
+		data = data[4:]
+		if uint32(len(data)) < length {
+			t.Fatalf("decrypted data too short, expected payload of length %d", length)
+		}
+		actualLine := data[:length]
+		data = data[length:]
+
+		if string(actualLine) != string(expectedLine) {
+			t.Errorf("mismatch: got %q, want %q", actualLine, expectedLine)
+		}
+	}
+
+	if len(data) > 0 {
+		t.Errorf("unexpected trailing data in decrypted stream: %d bytes", len(data))
 	}
 }

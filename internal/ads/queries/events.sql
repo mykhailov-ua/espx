@@ -89,6 +89,7 @@ stats AS (
 INSERT INTO campaign_stats (campaign_id, date, impressions_count, clicks_count, conversions_count)
 SELECT campaign_id, event_date, imps, clicks, convs
 FROM stats
+ORDER BY campaign_id, event_date
 ON CONFLICT (campaign_id, date) DO UPDATE SET
     impressions_count = campaign_stats.impressions_count + EXCLUDED.impressions_count,
     clicks_count = campaign_stats.clicks_count + EXCLUDED.clicks_count,

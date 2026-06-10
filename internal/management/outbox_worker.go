@@ -1,18 +1,3 @@
-// Package management implements OutboxWorker, which reads PENDING rows from
-// outbox_events and applies their side-effects to Redis (budget key creation,
-// campaign settings publication, brand frequency cap updates). The worker uses
-// PostgreSQL LISTEN on outbox_channel for real-time notifications, with a
-// 5x interval ticker as a safety fallback for missed notifications.
-//
-// Processing protocol:
-//  1. BEGIN, SELECT ... FOR UPDATE SKIP LOCKED (up to 100 rows).
-//  2. Set status = 'PROCESSING'; COMMIT.
-//  3. Apply side-effects to Redis via Pipelined.
-//  4. On success: UPDATE status = 'PROCESSED'.
-//     On Redis failure: UPDATE status = 'PENDING' (revert for retry).
-//
-// Stale PROCESSING rows (older than 5 minutes) are reset to PENDING by the
-// ticker to handle crashes that occurred between steps 2 and 4.
 package management
 
 import (
@@ -30,9 +15,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// OutboxWorker drains the outbox_events table and propagates campaign and settings
-// mutations to Redis. It is safe to run as a single instance; the SELECT FOR UPDATE
-// SKIP LOCKED ensures concurrent instances do not process the same row.
 type OutboxWorker struct {
 	svc *Service
 }
@@ -128,11 +110,6 @@ func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// ProcessOutbox reads up to 100 PENDING outbox events in a single transaction,
-// marks them PROCESSING, then applies Redis side-effects. Rows that fail Redis
-// application are reverted to PENDING; successful rows are marked PROCESSED.
-// Returns the first database-level error; Redis errors are logged and retried on
-// the next ProcessOutbox call.
 func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
 	var events []db.OutboxEvent
 

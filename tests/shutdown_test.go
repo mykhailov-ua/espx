@@ -57,7 +57,7 @@ func TestGracefulShutdown_NoDataLoss(t *testing.T) {
 	_, err := pool.Exec(ctx, "INSERT INTO campaigns (id, name, status, customer_id, budget_limit) VALUES ($1, $2, $3, $4, $5)", campaignID, "Shutdown Test", "ACTIVE", customerID, 1_000_000_000)
 	require.NoError(t, err)
 
-	registry := ads.NewRegistry(queries)
+	registry := newTestRegistry(t, queries)
 	_, _ = registry.Sync(ctx)
 
 	store := ads.NewPostgresStore(queries, 5*time.Second)

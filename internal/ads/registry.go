@@ -1,16 +1,3 @@
-// Package ads implements the in-process campaign registry that provides O(1)
-// look-ups by campaign UUID for the filter hot path. The registry stores an
-// immutable snapshot inside an atomic.Value (copy-on-write); writers replace the
-// entire map atomically so readers never observe partial updates and never block.
-//
-// Persistence uses two layers: a PostgreSQL source-of-truth read by Sync on start-up
-// and on each poll interval, and a JSON file replica written to disk after every
-// successful sync. The file replica allows the processor to boot without a live
-// database connection if the registry snapshot is recent enough (configurable).
-//
-// Hot reload is triggered via a Redis Pub/Sub channel (CampaignUpdateChannel);
-// any registry mutation published by the management service triggers an immediate
-// out-of-band Sync without waiting for the next polling tick.
 package ads
 
 import (
@@ -35,10 +22,6 @@ type campaignInfo struct {
 	status   db.CampaignStatusType
 }
 
-// CampaignRegistry is the in-process cache of active campaign metadata. It is safe
-// for concurrent use: readers hold the atomic snapshot pointer while Sync replaces
-// the map in one CAS operation. The embedded WaitGroup tracks the background sync
-// goroutine started by StartSync.
 type CampaignRegistry struct {
 	repo          db.Querier
 	data          atomic.Value
@@ -104,9 +87,7 @@ func (r *CampaignRegistry) GetCustomerID(campaignID uuid.UUID) (uuid.UUID, bool)
 	return info.campaign.CustomerID, true
 }
 
-// GetCampaign returns the full Campaign record from the snapshot, or (nil, false)
-// if the campaign is not in the registry. The returned pointer is valid for the
-// lifetime of the atomic snapshot; callers must not mutate it.
+// Returned pointer is valid for the snapshot lifetime; callers must not mutate it.
 func (r *CampaignRegistry) GetCampaign(id uuid.UUID) (*domain.Campaign, bool) {
 	m, _ := r.data.Load().(map[uuid.UUID]campaignInfo)
 	if m == nil {
@@ -193,11 +174,6 @@ func (r *CampaignRegistry) Add(id, customerID uuid.UUID, brandID *uuid.UUID, bra
 	}
 }
 
-// Sync fetches all active campaigns from PostgreSQL, rebuilds the in-memory map, and
-// atomically replaces the atomic.Value snapshot. It writes a JSON replica to the
-// configured file path. Returns the number of campaigns loaded and any read or write
-// error; callers that cannot tolerate a stale registry on first boot should assert
-// (n > 0, err == nil).
 func (r *CampaignRegistry) Sync(ctx context.Context) (int, error) {
 	rows, err := r.repo.ListActiveCampaigns(ctx)
 	if err != nil {
@@ -450,10 +426,6 @@ func (r *CampaignRegistry) loadReplica() (map[uuid.UUID]campaignInfo, error) {
 	return m, nil
 }
 
-// StartSync launches the background polling and Pub/Sub watch goroutines for the
-// registry. Polling fires every interval; Pub/Sub fires on each campaign mutation
-// event published by the management service via Redis PUBLISH. The goroutines
-// are tracked by the embedded WaitGroup and exit when ctx is cancelled.
 func (r *CampaignRegistry) StartSync(ctx context.Context, interval time.Duration) {
 	r.wg.Add(1)
 	go func() {

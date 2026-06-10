@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -171,6 +172,7 @@ func TestBrandFrequencyCapping(t *testing.T) {
 
 	queries := db.New(pool)
 	registry := ads.NewRegistry(queries)
+	registry.SetReplicaPath(filepath.Join(t.TempDir(), "campaigns_replica.json"))
 	_, err = registry.Sync(ctx)
 	require.NoError(t, err)
 

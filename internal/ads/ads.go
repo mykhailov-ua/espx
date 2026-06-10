@@ -1,3 +1,4 @@
+// Package ads implements ad-event ingestion, filtering, and stream processing.
 package ads
 
 import "time"

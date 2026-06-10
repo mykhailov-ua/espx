@@ -1,22 +1,3 @@
-// Package ads provides miscellaneous helpers shared across the ads package:
-//
-//   - NewFastUUID: a time-ordered UUID v7 variant that embeds a cached Unix-ms
-//     timestamp, a 48-bit atomic monotone sequence, and a 16-bit node ID derived
-//     from hostname+PID. The cached timestamp is updated by a background 1-ms ticker
-//     goroutine; this avoids a syscall on every UUID generation call. The result is
-//     monotonically ordered within a process and globally unique across nodes.
-//
-//   - CampaignRepo / CustomerRepo: thin sqlc wrappers that add txID-guarded spend
-//     updates (INSERT INTO sync_idempotency ON CONFLICT DO NOTHING) to make
-//     SyncWorker commits idempotent under network retries.
-//
-//   - DeepResetAdStreamEvent / ClearAdStreamEvent / DeepResetAdDLQEvent: pool
-//     reset helpers for vtproto-generated structs. DeepReset re-slices byte fields
-//     to length 0 (retaining capacity); Clear nils them (releases backing arrays).
-//     Use DeepReset when the struct will be immediately reused, Clear before Put.
-//
-//   - UnsafeString / UnsafeBytes: unsafe string <-> []byte conversions with zero copy.
-//     The caller guarantees the backing memory outlives the returned value.
 package ads
 
 import (
@@ -59,15 +40,6 @@ func init() {
 	}()
 }
 
-// NewFastUUID generates a time-ordered UUID without crypto/rand. Layout:
-//
-//	bytes  0-5:  48-bit Unix millisecond timestamp (big-endian, cached).
-//	bytes  6-7:  version nibble 0x7 | upper bits of 48-bit sequence.
-//	bytes  8-9:  variant 0x80 | 16-bit nodeID.
-//	bytes 10-15: lower 48 bits of the atomic sequence.
-//
-// The sequence wraps at 2^64; within a single millisecond window collisions
-// are impossible across the 2^64 sequence space.
 func NewFastUUID() (uuid.UUID, error) {
 	seq := atomic.AddUint64(&idSequence, 1)
 	now := cachedUnixMilli.Load()
@@ -117,10 +89,7 @@ func SliceToMap(slice []string) map[string]struct{} {
 	return m
 }
 
-// CampaignRepo wraps a sqlc Querier to implement domain.CampaignRepository.
-// UpdateSpend acquires a PostgreSQL transaction and inserts a txID row into
-// sync_idempotency before updating current_spend; if the txID is already present
-// the UPDATE is skipped, providing exactly-once semantics for SyncWorker.
+// UpdateSpend is exactly-once via sync_idempotency txID guard.
 type CampaignRepo struct {
 	queries db.Querier
 }
@@ -256,8 +225,6 @@ func (r *CampaignRepo) ListActive(ctx context.Context) ([]*domain.Campaign, erro
 	return campaigns, nil
 }
 
-// CustomerRepo wraps a sqlc Querier to implement domain.CustomerRepository.
-// UpdateBalance uses the same txID idempotency pattern as CampaignRepo.UpdateSpend.
 type CustomerRepo struct {
 	queries db.Querier
 }
@@ -340,8 +307,7 @@ func (r *CustomerRepo) UpdateBalance(ctx context.Context, id uuid.UUID, amount i
 	return nil
 }
 
-// UnsafeString converts a byte slice to a string without allocation.
-// The returned string must not outlive the byte slice.
+// Returned string must not outlive b.
 func UnsafeString(b []byte) string {
 	if len(b) == 0 {
 		return ""
@@ -349,8 +315,7 @@ func UnsafeString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
-// UnsafeBytes converts a string to a byte slice without allocation.
-// The returned slice must not be modified; doing so may corrupt the original string.
+// Returned slice must not be modified.
 func UnsafeBytes(s string) []byte {
 	if s == "" {
 		return nil
@@ -372,9 +337,6 @@ var byteSliceValuePool = sync.Pool{
 	},
 }
 
-// DeepResetAdStreamEvent re-slices all byte fields of m to length 0, retaining
-// their backing arrays for reuse. Use immediately before re-populating and
-// passing to MarshalToSizedBufferVT on the producer hot path.
 func DeepResetAdStreamEvent(m *pb.AdStreamEvent) {
 	if m == nil {
 		return
@@ -388,9 +350,7 @@ func DeepResetAdStreamEvent(m *pb.AdStreamEvent) {
 	m.CreatedAtUnix = 0
 }
 
-// ClearAdStreamEvent nils all byte fields of m, releasing the backing arrays
-// to the GC. Use before returning the struct to a sync.Pool to prevent the pool
-// from retaining arbitrarily large event payloads between reuses.
+// Nil byte fields before sync.Pool Put to avoid retaining large payloads.
 func ClearAdStreamEvent(m *pb.AdStreamEvent) {
 	if m == nil {
 		return

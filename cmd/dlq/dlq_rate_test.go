@@ -52,7 +52,6 @@ func TestRequeueDLQ_RateLimiting(t *testing.T) {
 	dlqStream := "test:dlq"
 	targetStream := "test:target"
 
-	// Seed 40 events
 	const eventCount = 40
 	for i := 0; i < eventCount; i++ {
 		cid := uuid.New()
@@ -81,7 +80,6 @@ func TestRequeueDLQ_RateLimiting(t *testing.T) {
 		}
 	}
 
-	// Test 1: Unlimited Requeue (rateLimit = 0)
 	start := time.Now()
 	err := requeueDLQ(ctx, rdb, dlqStream, targetStream, 100, 0)
 	if err != nil {
@@ -90,7 +88,6 @@ func TestRequeueDLQ_RateLimiting(t *testing.T) {
 	elapsedUnlimited := time.Since(start)
 	t.Logf("Unlimited requeued %d events in %v", eventCount, elapsedUnlimited)
 
-	// Verify target stream count
 	lenTarget, err := rdb.XLen(ctx, targetStream).Result()
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +96,6 @@ func TestRequeueDLQ_RateLimiting(t *testing.T) {
 		t.Errorf("expected %d target events, got %d", eventCount, lenTarget)
 	}
 
-	// Clear target stream and re-seed DLQ stream for rate-limited test
 	rdb.Del(ctx, dlqStream, targetStream)
 
 	for i := 0; i < eventCount; i++ {
@@ -125,9 +121,6 @@ func TestRequeueDLQ_RateLimiting(t *testing.T) {
 		})
 	}
 
-	// Test 2: Throttled Requeue (rateLimit = 20 events/sec)
-	// For 40 events: first 20 tokens are free (burst=20), next 20 events require 1 second.
-	// Expected time is >= 950ms.
 	start = time.Now()
 	err = requeueDLQ(ctx, rdb, dlqStream, targetStream, 100, 20)
 	if err != nil {
@@ -167,7 +160,6 @@ func TestRestoreDLQ_RateLimiting(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 	archivePath := filepath.Join(tempDir, "archive.bin")
 
-	// Create archive with 40 events
 	const eventCount = 40
 	file, err := os.Create(archivePath)
 	if err != nil {
@@ -196,7 +188,6 @@ func TestRestoreDLQ_RateLimiting(t *testing.T) {
 	}
 	file.Close()
 
-	// Test: Throttled Restore (rateLimit = 20 events/sec)
 	start := time.Now()
 	err = restoreDLQ(ctx, rdb, archivePath, targetStream, 10, 20)
 	if err != nil {

@@ -1,14 +1,3 @@
-// Package ads implements StreamProducer, the write side of the Redis Streams ingestion
-// pipeline. Each call to Process serialises the event into a vtproto-encoded AdStreamEvent,
-// writes it to a Redis Stream via XAdd, and returns. The encoding path is zero-allocation:
-// a pooled pb.AdStreamEvent is populated with UnsafeBytes slices referencing the
-// original string data (no copy), sized via SizeVT, and marshalled directly into a
-// pooled byte buffer with MarshalToSizedBufferVT.
-//
-// The XAdd call uses Approx=true (MAXLEN ~ maxStreamLen) to allow ClickHouse-style
-// amortised trimming, avoiding the O(log n) exact-trim cost on every append.
-// The XAddArgs Values slice is pooled as *[]any to prevent the two-element slice
-// from escaping to the heap on every XAdd call.
 package ads
 
 import (
@@ -44,9 +33,7 @@ var (
 	}
 )
 
-// StreamProducer writes ad events to a Redis Stream as vtproto-encoded messages.
-// maxStreamLen controls the approximate MAXLEN trim; it should be set to at least
-// maxWorkers x batchSize x expected_flush_lag_seconds to prevent data loss.
+// maxStreamLen should be >= maxWorkers * batchSize * expected_flush_lag to avoid data loss.
 type StreamProducer struct {
 	rdb          redis.UniversalClient
 	streamName   string
@@ -68,10 +55,6 @@ func NewStreamProducer(
 	}
 }
 
-// Process assigns a UUID v7 ClickID if none is set, marshals the event into a pooled
-// vtproto buffer, and appends it to the Redis Stream. On error the event is counted
-// in the EventsDropped metric; the caller is responsible for routing the event to the
-// fraud stream or DLQ if required.
 func (p *StreamProducer) Process(evt *domain.Event) error {
 	if evt.ClickID == "" {
 		id, err := uuid.NewV7()

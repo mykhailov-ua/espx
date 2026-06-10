@@ -21,6 +21,17 @@ type Querier interface {
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) (AdminAuditLog, error)
 	CreateBlacklistIP(ctx context.Context, arg CreateBlacklistIPParams) (IpBlacklist, error)
 	CreateBrand(ctx context.Context, arg CreateBrandParams) (AdvertiserBrand, error)
+	// events.sql: sqlc query definitions for campaign and event persistence.
+	// All event writes target the PARTITION BY RANGE (created_date) table; callers
+	// must supply created_date explicitly to guarantee correct partition routing.
+	// ON CONFLICT (click_id, created_date) DO NOTHING provides idempotency within
+	// the daily partition boundary.
+	//
+	// InsertEventsBatch is the primary batch-write path. The CTE uses RETURNING to
+	// count only newly-inserted rows for campaign_stats aggregation; this prevents
+	// double-counting when the same batch is retried. The EXISTS sub-select on campaigns
+	// filters orphaned campaign_ids before the stats INSERT to avoid FK violations
+	// rolling back the entire batch.
 	CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error)
 	CreateCustomer(ctx context.Context, arg CreateCustomerParams) (Customer, error)
 	CreateLedgerEntry(ctx context.Context, arg CreateLedgerEntryParams) (BalanceLedger, error)
@@ -34,6 +45,12 @@ type Querier interface {
 	GetBrand(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error)
 	GetBrandForUpdate(ctx context.Context, id pgtype.UUID) (AdvertiserBrand, error)
 	GetCampaign(ctx context.Context, id pgtype.UUID) (Campaign, error)
+	// budget.sql: sqlc query definitions for budget and customer balance management.
+	// UpdateCampaignSpend uses an inline CASE to atomically set status to EXHAUSTED
+	// when current_spend + delta >= budget_limit, eliminating a separate UPDATE round-trip.
+	// UpdateCustomerBalance is a simple decrement; the corresponding spend is tracked
+	// in the campaign record. Both queries are executed inside a PostgreSQL transaction
+	// with an idempotency check (sync_idempotency) by CampaignRepo and CustomerRepo.
 	GetCampaignBudget(ctx context.Context, id pgtype.UUID) (GetCampaignBudgetRow, error)
 	GetCampaignForUpdate(ctx context.Context, id pgtype.UUID) (Campaign, error)
 	GetCampaignFull(ctx context.Context, id pgtype.UUID) (Campaign, error)

@@ -25,7 +25,6 @@ func main() {
 	jobs := make(chan []byte, 10000)
 	var wg sync.WaitGroup
 
-	// Start workers
 	for i := 0; i < *workersCount; i++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -63,7 +62,6 @@ func main() {
 		}(i)
 	}
 
-	// Main file tailing loop
 	var file *os.File
 	var err error
 	for {
@@ -77,14 +75,12 @@ func main() {
 	defer file.Close()
 
 	header := make([]byte, 4)
-	payloadBuf := make([]byte, 1024*1024) // 1MB buffer
+	payloadBuf := make([]byte, 1024*1024)
 
 	for {
-		// Read length header
 		_, err := io.ReadFull(file, header)
 		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				// Check if file was rotated (size shrunk or recreated)
 				stat, statErr := os.Stat(*logFilePath)
 				if statErr == nil {
 					currStat, fileStatErr := file.Stat()
@@ -103,7 +99,6 @@ func main() {
 						}
 					}
 				}
-				// Sleep and retry tailing
 				time.Sleep(5 * time.Millisecond)
 				continue
 			}
@@ -117,7 +112,6 @@ func main() {
 			continue
 		}
 
-		// Read payload
 		if int(length) > len(payloadBuf) {
 			payloadBuf = make([]byte, length)
 		}
@@ -127,14 +121,12 @@ func main() {
 			continue
 		}
 
-		// Send job to channel
 		payloadCopy := make([]byte, length)
 		copy(payloadCopy, payloadBuf[:length])
 
 		select {
 		case jobs <- payloadCopy:
 		default:
-			// Channel full, drop or block
 			jobs <- payloadCopy
 		}
 	}

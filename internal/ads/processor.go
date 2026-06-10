@@ -1,17 +1,3 @@
-// Package ads implements the Redis Streams consumer pipeline that drains ad-event
-// messages from sharded streams into PostgreSQL (transactional ledger) and ClickHouse
-// (columnar telemetry). StreamConsumer operates a fan-out of worker goroutines each
-// holding an XReadGroup lease; batch accumulation is bounded by batchSize and flushInt
-// to amortize per-write PostgreSQL round-trips. Write failures trigger exponential
-// back-off controlled by the embedded CircuitBreaker; repeated failures decompose the
-// batch into singleton writes to isolate poison-pill messages before escalating
-// survivors to the ad:events:dlq stream serialized as vtproto-encoded AdDLQEvent.
-//
-// The janitor goroutine uses XAutoClaim to reclaim messages abandoned by crashed
-// consumers after streamMinIdle, preventing PEL (Pending Entry List) accumulation.
-// The dlqMonitor goroutine samples XLen every 15 s to keep the DLQ Prometheus gauge
-// current. All goroutines check ctx.Done() on every iteration; shutdown drains any
-// buffered batch before returning. See docs/architecture.md Processor section.
 package ads
 
 import (
@@ -33,11 +19,6 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-// StreamConsumer is a Redis Streams consumer group worker pool for a single logical
-// stream. It maintains maxWorkers concurrent XReadGroup loops, a janitor goroutine
-// for autoclaim, and a dlqMonitor goroutine for queue-depth observability. The
-// CircuitBreaker field gates flush attempts; when Open, workers back off for the
-// remaining timeout duration rather than hammering a degraded downstream.
 type StreamConsumer struct {
 	store         domain.EventStore
 	rdb           redis.UniversalClient
@@ -78,10 +59,7 @@ var adLogRecordPool = sync.Pool{
 	},
 }
 
-// NewStreamConsumer constructs a StreamConsumer and derives a globally unique
-// consumerID by combining the provided base ID, the OS hostname, and a random UUID
-// suffix to prevent PEL conflicts when multiple processor replicas share the same
-// configuration. The CircuitBreaker is initialized with a timeout of 2x retryMaxWait.
+// consumerID includes hostname and UUID suffix to avoid PEL conflicts across replicas.
 func NewStreamConsumer(
 	store domain.EventStore,
 	rdb redis.UniversalClient,
@@ -119,10 +97,6 @@ func NewStreamConsumer(
 	}
 }
 
-// Start creates the consumer group if it does not exist (XGroupCreateMkStream with
-// offset "0" to process all historical messages on first boot), then launches
-// maxWorkers worker goroutines plus one janitor and one dlqMonitor. It is idempotent:
-// concurrent calls are serialized by startMu and subsequent calls are no-ops.
 func (p *StreamConsumer) Start(ctx context.Context) {
 	p.startMu.Lock()
 	defer p.startMu.Unlock()
@@ -165,8 +139,6 @@ func (p *StreamConsumer) Close() {
 	}
 }
 
-// Wait blocks until all internal goroutines exit or the supplied context expires.
-// Use after Close to guarantee a clean drain before the process terminates.
 func (p *StreamConsumer) Wait(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {

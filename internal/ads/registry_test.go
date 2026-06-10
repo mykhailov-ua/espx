@@ -17,7 +17,7 @@ import (
 
 func TestRegistry_LockFreeReadsStress(t *testing.T) {
 	mock := &MockRepo{}
-	r := NewRegistry(mock)
+	r := newTestRegistry(t, mock)
 
 	id1 := uuid.New()
 	customerID1 := uuid.New()
@@ -55,11 +55,7 @@ func TestRegistry_LockFreeReadsStress(t *testing.T) {
 }
 
 func TestRegistry_FileReplicationAndFailover(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "registry-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
-
-	replicaPath := filepath.Join(tmpDir, "campaigns_replica.json")
+	replicaPath := filepath.Join(t.TempDir(), "campaigns_replica.json")
 
 	id1 := uuid.New()
 	id2 := uuid.New()

@@ -1,14 +1,3 @@
-// Package ads contains UnifiedFilter, the single point of entry for all
-// per-event policy checks executed after stream deserialization. The filter
-// orchestrates budget reservation, pacing, frequency capping, and geo-targeting
-// in a single Redis Lua call to maintain atomicity across counters. The Lua
-// script path is O(1) with respect to campaign count; all keys are computed
-// on the call site from pooled byte buffers to eliminate heap allocation.
-//
-// Execution order: EmergencyBreaker -> IPRateLimit -> Duplicate -> Geo ->
-// UnifiedFilter (budget + pacing + fcap in Lua) -> Fraud.
-// Stopping on first error avoids unnecessary Redis round-trips for events
-// that are already invalid.
 package ads
 
 import (
@@ -105,16 +94,8 @@ type DBHealthChecker interface {
 	Ping(ctx context.Context) error
 }
 
-// UnifiedFilter atomically validates budget availability, daily pacing, and
-// frequency cap (user-level or brand-level) for a single event via a Redis
-// Lua script. Atomicity is required because budget and pacing counters must
-// stay consistent: a non-atomic check-then-decrement could double-spend or
-// leave pacing counters ahead of actual spend under concurrent load.
-//
-// The filter holds a pool of luaArgs structs that pre-allocate all string
-// and []string fields at pool construction time. unsafeString is used to
-// convert pooled byte-slices to string without copy; the lifetime of the
-// resulting string is bounded to the single Eval call.
+// Budget, pacing, and fcap are decremented atomically in one Lua script.
+// unsafeString keys must not outlive the Eval call.
 type UnifiedFilter struct {
 	rdbs                     []redis.UniversalClient
 	sharder                  Sharder
@@ -203,10 +184,6 @@ func parseBidMicro(payload []byte) int64 {
 	return 0
 }
 
-// NewUnifiedFilter constructs a UnifiedFilter backed by the given sharded Redis
-// slice. The Lua script SHA is not pre-loaded (EVALSHA); EVAL is used directly
-// because the script is short and Redis script cache eviction is not detectable
-// without a round-trip SCRIPT EXISTS check.
 func NewUnifiedFilter(
 	rdbs []redis.UniversalClient,
 	sharder Sharder,
@@ -351,11 +328,6 @@ func (f *UnifiedFilter) getRDB(campaignID uuid.UUID) redis.UniversalClient {
 	return f.rdbs[idx%len(f.rdbs)]
 }
 
-// Check executes the unified Lua filter for the given event and returns one of the
-// package-level sentinel errors (ErrBudgetExhausted, ErrPacingExhausted,
-// ErrFreqLimitExceeded, ErrGeoBlocked) on policy rejection, or a Redis transport
-// error on infrastructure failure. A nil return means the event passed all checks
-// and the associated budget/pacing counters have been decremented atomically.
 func (f *UnifiedFilter) Check(ctx context.Context, evt *domain.Event) error {
 	campInfo, ok := f.registry.GetCampaign(evt.CampaignID)
 	if !ok {

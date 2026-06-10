@@ -1,16 +1,3 @@
-// Package ads provides a mutex-guarded circuit breaker with per-worker failure
-// counting. State transitions follow the standard three-state model:
-//
-//	Closed  -> (failure count >= threshold per worker)  -> Open
-//	Open    -> (openTimeout elapsed, first Allow call)  -> HalfOpen
-//	HalfOpen -> (RecordSuccess)  -> Closed
-//	HalfOpen -> (RecordFailure or RecordCancellation)  -> Open
-//
-// Unlike the lock-free RedisBreaker in the database package, this implementation
-// tracks failure counts at per-worker granularity to allow heterogeneous worker
-// fleets (e.g., CH workers vs PG workers) sharing the same breaker to isolate
-// noise sources before tripping. Only the mutex-guarded failure map is authoritative;
-// the state field is protected by the same lock.
 package ads
 
 import (
@@ -18,9 +5,7 @@ import (
 	"time"
 )
 
-// CircuitState is the type-safe enumeration of circuit breaker states. The zero
-// value (CircuitClosed = 0) is intentional: a freshly zeroed CircuitBreaker struct
-// begins in the closed (allowing) state without requiring explicit initialisation.
+// Zero value is CircuitClosed (intentional).
 type CircuitState int32
 
 const (
@@ -42,9 +27,7 @@ func (s CircuitState) String() string {
 	}
 }
 
-// CircuitBreaker gates downstream calls for the StreamConsumer worker pool.
-// failThreshold is evaluated per workerID key; opening one worker's counter does not
-// immediately trip workers whose individual counts are below threshold.
+// failThreshold is per workerID, not global.
 type CircuitBreaker struct {
 	mu            sync.Mutex
 	state         CircuitState
@@ -63,11 +46,6 @@ func NewCircuitBreaker(failThreshold int, openTimeout time.Duration) *CircuitBre
 	}
 }
 
-// Allow returns true if the breaker permits the caller to attempt a downstream
-// operation. In the Open state it returns true only once openTimeout has elapsed,
-// simultaneously transitioning to HalfOpen to probe recovery. Concurrent callers
-// during the Open->HalfOpen transition all read the same state change because the
-// state assignment and Allow check share the same mutex.
 func (cb *CircuitBreaker) Allow() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -91,8 +69,6 @@ func (cb *CircuitBreaker) Allow() bool {
 	}
 }
 
-// RecordSuccess resets per-worker failure counts and, when in HalfOpen state,
-// promotes the breaker back to Closed.
 func (cb *CircuitBreaker) RecordSuccess(workerID string) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -105,9 +81,6 @@ func (cb *CircuitBreaker) RecordSuccess(workerID string) {
 	}
 }
 
-// RecordFailure increments the per-worker failure counter. If the count reaches
-// failThreshold the breaker trips to Open; in HalfOpen the first failure immediately
-// re-opens without checking the threshold.
 func (cb *CircuitBreaker) RecordFailure(workerID string) {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
@@ -148,9 +121,6 @@ func (cb *CircuitBreaker) Failures(workerID string) int {
 	return int(cb.failures[workerID])
 }
 
-// WaitDuration returns the remaining time until the breaker may attempt HalfOpen.
-// Returns 0 if the breaker is not in Open state. Used by workers to compute back-off
-// sleep without polling Allow in a tight loop.
 func (cb *CircuitBreaker) WaitDuration() time.Duration {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()

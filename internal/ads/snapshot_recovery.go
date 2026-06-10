@@ -1,19 +1,3 @@
-// Package ads implements the disaster-recovery snapshot pipeline that bridges
-// ClickHouse aggregated spend data and PostgreSQL budget state. The pipeline
-// addresses two failure scenarios:
-//
-//  1. Redis budget key loss (flush, restart): RestoreSnapshot reads the
-//     ClickHouse aggregates up to a checkpoint time, writes current_spend
-//     to PostgreSQL, and seeds Redis budget:campaign:* keys with
-//     (budget_limit - spend) so the edge Lua filter resumes correctly.
-//
-//  2. Processor downtime with unbounded Redis accumulation: ReplayTelemetrySince
-//     re-runs all raw events since the checkpoint through UnifiedFilter with
-//     idempotency guarded by MarkEventIdempotent in PostgreSQL, preventing
-//     double-billing of events already reflected in the snapshot.
-//
-// CreateSnapshot serialises a Snapshot struct (checkpoint time + campaign spend map)
-// to JSON; the bytes are intended for durable storage (S3, GCS) by the caller.
 package ads
 
 import (
@@ -45,9 +29,6 @@ type PostgresConn interface {
 	MarkEventIdempotent(ctx context.Context, clickID string) (bool, error)
 }
 
-// SnapshotReplicator orchestrates the snapshot create, restore, and replay
-// operations. rdbs holds the sharded Redis slice used to seed budget keys
-// after restore; sharder routes each campaign ID to the correct shard.
 type SnapshotReplicator struct {
 	mu          sync.RWMutex
 	pgConn      PostgresConn
@@ -75,9 +56,6 @@ func NewSnapshotReplicator(
 	}
 }
 
-// CreateSnapshot queries ClickHouse for aggregated spend per campaign up to until,
-// serialises the result as JSON, and returns the raw bytes. The mu write lock
-// prevents concurrent snapshot operations from racing on the ClickHouse connection.
 func (sr *SnapshotReplicator) CreateSnapshot(ctx context.Context, until time.Time) ([]byte, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
@@ -100,9 +78,6 @@ func (sr *SnapshotReplicator) CreateSnapshot(ctx context.Context, until time.Tim
 	return data, nil
 }
 
-// RestoreSnapshot deserialises snapshotData, writes current_spend to PostgreSQL for
-// each campaign, and seeds the Redis budget key with remaining = budget_limit - spend.
-// Returns the parsed Snapshot for use as a checkpoint timestamp in ReplayTelemetrySince.
 func (sr *SnapshotReplicator) RestoreSnapshot(ctx context.Context, snapshotData []byte) (*Snapshot, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
@@ -140,10 +115,7 @@ func (sr *SnapshotReplicator) RestoreSnapshot(ctx context.Context, snapshotData 
 	return &snap, nil
 }
 
-// ReplayTelemetrySince replays all raw events recorded since since through the
-// UnifiedFilter. Each event is first checked for idempotency in PostgreSQL;
-// duplicate events are skipped. ErrBudgetExhausted events are silently dropped
-// (budget already exhausted in the restored state); all other errors abort the replay.
+// Events already in the snapshot are skipped via MarkEventIdempotent to prevent double-billing.
 func (sr *SnapshotReplicator) ReplayTelemetrySince(ctx context.Context, since time.Time, f *UnifiedFilter) (int, error) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()

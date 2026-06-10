@@ -9,19 +9,15 @@ RSYNC_BWLIMIT="${RSYNC_BWLIMIT:-5000}"
 
 mkdir -p "$LOG_DIR"
 
-for file in "$LOG_DIR"/segment_*.log.ready; do
+for file in "$LOG_DIR"/segment_*.log.zst.ready; do
 	[ -e "$file" ] || continue
 	base="${file%.ready}"
 	evac_file="$base.evacuating"
 	mv "$file" "$evac_file"
-	if ! zstd -3 --rm "$evac_file" -o "$base.zst"; then
-		mv "$evac_file" "$file"
-		continue
-	fi
-	if ! rsync -az -e "ssh -o StrictHostKeyChecking=no" --bwlimit="$RSYNC_BWLIMIT" "$base.zst" "$STORAGE_BOX_USER@$STORAGE_BOX_HOST:$STORAGE_BOX_PATH/"; then
-		zstd -d --rm "$base.zst" -o "$evac_file"
+	remote_filename=$(basename "$base")
+	if ! rsync -az -e "ssh -o StrictHostKeyChecking=no" --bwlimit="$RSYNC_BWLIMIT" "$evac_file" "$STORAGE_BOX_USER@$STORAGE_BOX_HOST:$STORAGE_BOX_PATH/$remote_filename"; then
 		mv "$evac_file" "$file"
 		exit 1
 	fi
-	rm "$base.zst"
+	rm "$evac_file"
 done

@@ -1,12 +1,43 @@
 package logger
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
+	"golang.org/x/crypto/pbkdf2"
 )
+
+var (
+	zstdEncoderPool = sync.Pool{
+		New: func() any {
+			enc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault), zstd.WithEncoderConcurrency(1))
+			if err != nil {
+				panic(err)
+			}
+			return enc
+		},
+	}
+	zstdDecoder *zstd.Decoder
+)
+
+func init() {
+	var err error
+	zstdDecoder, err = zstd.NewReader(nil)
+	if err != nil {
+		panic(err)
+	}
+}
 
 type LogPayload struct {
 	ready    atomic.Uint32
@@ -41,8 +72,23 @@ func (s *LogShard) Write(priority uint8, data []byte) bool {
 		alloc := atomic.LoadUint64(&s.allocCursor)
 		read := atomic.LoadUint64(&s.readCursor)
 		if alloc-read >= ringUsable {
+			for spin := 0; spin < 100; spin++ {
+				if spin < 20 {
+					runtime.Gosched()
+				} else {
+					time.Sleep(time.Microsecond)
+				}
+				read = atomic.LoadUint64(&s.readCursor)
+				if alloc-read < ringUsable {
+					goto spaceAvailable
+				}
+			}
 			return false
 		}
+		if alloc-read >= ringUsable-8192 {
+			runtime.Gosched()
+		}
+	spaceAvailable:
 		if !atomic.CompareAndSwapUint64(&s.allocCursor, alloc, alloc+1) {
 			continue
 		}
@@ -55,12 +101,9 @@ func (s *LogShard) Write(priority uint8, data []byte) bool {
 		payload.ready.Store(1)
 
 		for {
-			pub := atomic.LoadUint64(&s.writeCursor)
-			if pub == alloc {
-				if atomic.CompareAndSwapUint64(&s.writeCursor, pub, pub+1) {
-					return true
-				}
-				continue
+			if atomic.LoadUint64(&s.writeCursor) == alloc {
+				atomic.StoreUint64(&s.writeCursor, alloc+1)
+				return true
 			}
 			runtime.Gosched()
 		}
@@ -121,6 +164,29 @@ type Logger struct {
 	persistQueueCap       int
 	wg                    sync.WaitGroup
 	closeChan             chan struct{}
+
+	cipherAEAD  cipher.AEAD
+	encryptBuf  []byte
+	compressBuf []byte
+	nonceBuf    [12]byte
+}
+
+func deriveKeyFromEnv() ([]byte, error) {
+	passphrase := os.Getenv("LOG_ENCRYPTION_KEY")
+	if passphrase == "" {
+		passphrase = "default-espx-logger-fallback-passphrase-change-me"
+	}
+	salt := []byte("espx-logger-salt-salt")
+	return pbkdf2.Key([]byte(passphrase), salt, 4096, 32, sha256.New), nil
+}
+
+func (l *Logger) incrementNonce() {
+	for i := len(l.nonceBuf) - 1; i >= 0; i-- {
+		l.nonceBuf[i]++
+		if l.nonceBuf[i] != 0 {
+			break
+		}
+	}
 }
 
 func NewLogger(cfg Config, numShards int) *Logger {
@@ -132,12 +198,41 @@ func NewLogger(cfg Config, numShards int) *Logger {
 	for i := 0; i < numShards; i++ {
 		shards[i] = NewLogShard()
 	}
+
+	key, err := deriveKeyFromEnv()
+	if err != nil {
+		panic(err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err)
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		panic(err)
+	}
+
+	bufSize := cfg.FlushBufferSize
+	if bufSize <= 0 {
+		bufSize = 256 * 1024
+	}
+	encryptBuf := make([]byte, 4+12+bufSize+16+128)
+
+	var nonceBuf [12]byte
+	if _, err := rand.Read(nonceBuf[:]); err != nil {
+		panic(err)
+	}
+
 	l := &Logger{
 		cfg:             cfg,
 		shards:          shards,
 		persistCh:       make(chan *AlignedBuffer, queueDepth),
 		persistQueueCap: queueDepth,
 		closeChan:       make(chan struct{}),
+		cipherAEAD:      aesgcm,
+		encryptBuf:      encryptBuf,
+		compressBuf:     make([]byte, 0, bufSize),
+		nonceBuf:        nonceBuf,
 	}
 	_ = os.MkdirAll(l.cfg.LogDir, 0755)
 	l.openActiveFile()
@@ -170,4 +265,69 @@ func (l *Logger) WriteToShard(shardID int, priority uint8, data []byte) bool {
 func (l *Logger) Write(priority uint8, data []byte) bool {
 	shardID := int(l.writerIndex.Add(1) % uint64(len(l.shards)))
 	return l.shards[shardID].Write(priority, data)
+}
+
+func DeriveKey(passphrase string) []byte {
+	salt := []byte("espx-logger-salt-salt")
+	return pbkdf2.Key([]byte(passphrase), salt, 4096, 32, sha256.New)
+}
+
+func DecryptSegment(filePath string, key []byte) ([]byte, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+
+	var decrypted []byte
+	header := make([]byte, 4)
+	nonce := make([]byte, 12)
+
+	for {
+		_, err := io.ReadFull(file, header)
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		length := binary.BigEndian.Uint32(header)
+		if length < 12+16 {
+			return nil, fmt.Errorf("invalid block length: %d", length)
+		}
+
+		if _, err := io.ReadFull(file, nonce); err != nil {
+			return nil, err
+		}
+
+		ciphertextLen := length - 12
+		ciphertext := make([]byte, ciphertextLen)
+		if _, err := io.ReadFull(file, ciphertext); err != nil {
+			return nil, err
+		}
+
+		plaintext, err := aesgcm.Open(nil, nonce, ciphertext, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		decompressed, err := zstdDecoder.DecodeAll(plaintext, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress block: %w", err)
+		}
+
+		decrypted = append(decrypted, decompressed...)
+	}
+
+	return decrypted, nil
 }

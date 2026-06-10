@@ -1,14 +1,3 @@
-// Package ads provides SettingsWatcher, a live-reloadable configuration layer for
-// runtime-adjustable parameters (rate limit, event charge amounts, emergency breaker).
-// The current config is stored in an atomic.Value snapshot; callers read it via Get
-// without any lock contention. Updates are driven by a Redis config:version counter:
-// the watcher polls at interval; if the stored version is higher than its local copy
-// it fetches config:values via HGetAll, parses the new config, and atomically swaps
-// the snapshot. Version-gated polling avoids redundant HGetAll calls when the config
-// has not changed since the last tick.
-//
-// The initial config is seeded from the static Config struct at construction time;
-// subsequent versions are layered on top (un-set fields retain the previous value).
 package ads
 
 import (
@@ -22,10 +11,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// DynamicConfig is the live-reloadable subset of Config. Fields are expressed in
-// their natural units (not micro-units) except ClickAmount and ImpressionAmount
-// which are stored as int64 micro-unit values consistent with the rest of the
-// budget subsystem.
 type DynamicConfig struct {
 	Version          int64 `json:"version"`
 	RateLimitPerMin  int   `json:"rate_limit_per_min"`
@@ -35,12 +20,6 @@ type DynamicConfig struct {
 	EmergencyBreaker bool  `json:"emergency_breaker"`
 }
 
-// SettingsWatcher polls Redis for config version changes and updates the
-// atomic DynamicConfig snapshot. The currentVersion field is read and written
-// with atomic operations even though it is also accessed under no lock, because
-// the snapshot swap and the version store are not required to be atomic with each
-// other - a reader may briefly see a version N+1 snapshot with version N stored,
-// which is harmless.
 type SettingsWatcher struct {
 	rdb            redis.UniversalClient
 	currentVersion int64
@@ -64,14 +43,11 @@ func NewSettingsWatcher(rdb redis.UniversalClient, initial *config.Config) *Sett
 	return sw
 }
 
-// Get returns the current DynamicConfig snapshot. Callers must not mutate the
-// returned pointer; doing so would create a data race with the sync goroutine.
+// Callers must not mutate the returned pointer.
 func (sw *SettingsWatcher) Get() *DynamicConfig {
 	return sw.snapshot.Load().(*DynamicConfig)
 }
 
-// Start runs the version-poll loop in the calling goroutine. It is intended to be
-// launched in a dedicated goroutine; it exits when ctx is cancelled.
 func (sw *SettingsWatcher) Start(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

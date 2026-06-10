@@ -4,3 +4,5 @@ bin/
 vendor/
 .idea/
 .vscode/
+campaigns_replica.json
+campaigns_replica.json.tmp

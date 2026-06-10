@@ -72,3 +72,29 @@ func BenchmarkLoggerWriteParallel(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkWriteBufferEncryption(b *testing.B) {
+	cfg := Config{
+		LogDir:           b.TempDir(),
+		FlushBufferSize:  256 * 1024,
+		RotateSize:       512 * 1024 * 1024,
+		RotateInterval:   time.Hour,
+		DiskLatencyLimit: time.Second,
+	}
+	l := NewLogger(cfg, 1)
+	defer l.Close()
+
+	buf := NewAlignedBuffer(cfg.FlushBufferSize)
+	data := []byte("{\"level\":\"info\",\"msg\":\"click event successfully processed\",\"priority\":1}")
+	for buf.Available() >= len(data) {
+		buf.Write(data)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		l.writeBuffer(buf)
+		l.bytesWritten = 0
+	}
+}

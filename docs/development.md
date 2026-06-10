@@ -106,13 +106,13 @@ go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt
 ### Specialized Containers
 
 #### Dockerfile.log-evacuator
-The production image built via `Dockerfile` uses a statically linked, debian-distroless base lacking shell, package manager, and diagnostic tools to optimize performance and security. Out-of-process, claim-based log evacuation requires OS-level utility bins (`rsync`, `zstd`, `openssh-client`, `bash`, `coreutils`). `Dockerfile.log-evacuator` packages these dependencies into a dedicated, isolated Alpine container to separate file transport/compression duties from the performance-critical ingestion services.
+The production image built via `Dockerfile` uses a statically linked, debian-distroless base lacking a shell, package manager, and diagnostic tools. Out-of-process log evacuation requires OS-level utility bins (`rsync`, `openssh-client`, `bash`, `coreutils`). `Dockerfile.log-evacuator` packages these dependencies into a separate, isolated Alpine container to decouple file transport from the ingestion services.
 
 ### Log Evacuation Procedures
 - **Hetzner Storage Box Setup**: Generate a passphrase-less Ed25519 SSH key (`~/.ssh/storagebox_id`), register the public key in Hetzner Robot Console, and set `STORAGE_BOX_SSH_KEY_PATH=/root/.ssh/storagebox_id` in `.env`.
 - **Cron Evacuation Trigger**: Copy `deploy/cron/log-evacuate.cron` to `/etc/cron.d/log-evacuate` (chmod `0644`). It re-runs every 5 minutes logging execution status to `/var/log/espx-evacuate.log`.
-- **Claim Renaming Details**: Segments are claimed by renaming `/var/log/espx/segment_*.log.ready` to `*.log.evacuating`, compressed with `zstd -3 --rm`, and rsync-uploaded. Upon successful transfer, local source files are purged.
-- **Recovering Locked Segments**: If a crash halts compression, manually rename stuck `.evacuating` files back to `.ready` to trigger a retry.
+- **Claim Renaming Details**: Active log files are compressed and encrypted directly by the logger. Rotated files are renamed with the suffix `.log.zst.ready`. The evacuator script claims these by renaming to `*.log.zst.evacuating` and uploads them via `rsync`. Local source files are deleted upon successful transfer.
+- **Recovering Locked Segments**: If a crash halts upload, manually rename stuck `.evacuating` files back to `.ready` to trigger a retry.
 - **Log Retention Policy**: There is no automatic retention on the Hetzner Storage Box. Manually execute purges via SSH or schedule periodic cleanups for segments older than the desired threshold.
 
 ### Redis Recovery Verification

@@ -16,7 +16,9 @@ func ConnectClickHouse(ctx context.Context, dsn string) (driver.Conn, error) {
 	}
 
 	opts.Settings = clickhouse.Settings{
-		"max_execution_time": 60,
+		"max_execution_time":    60,
+		"async_insert":          1,
+		"wait_for_async_insert": 0,
 	}
 	opts.DialTimeout = 5 * time.Second
 	opts.ConnMaxLifetime = time.Hour

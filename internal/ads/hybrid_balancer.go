@@ -1,19 +1,3 @@
-// Package ads implements HybridBalancer, a campaign selector that combines
-// weighted random sampling (Vose's alias method, O(1) per sample) with
-// consistent jump-hash sharding for Redis key routing.
-//
-// Weight calculation per campaign:
-//
-//	w = BidMicro * CTR * sqrt(budgetRatio) * pacingFactor
-//
-// where pacingFactor is a sinusoidal approximation of the intended spend curve
-// scaled by PeakTrafficFactor. Weights are re-normalised to sum to n before
-// building the alias table.
-//
-// For hot campaigns (currentCampaignRps > maxRpsPerNode), the shard is derived
-// by XOR-combining the campaign's base jump-hash with a user-keyed FNV32a
-// sub-shard index. This distributes bursts across multiple Redis keys without
-// changing the total shard count, preventing hot-key saturation on a single node.
 package ads
 
 import (
@@ -27,9 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// CampaignMeta carries the scoring inputs required by UpdateCampaigns. The fields
-// are read-only during sampling; they must not be mutated after being passed to
-// UpdateCampaigns because the pointer is stored inside the alias table snapshot.
+// Must not be mutated after UpdateCampaigns; pointer is stored in the alias table snapshot.
 type CampaignMeta struct {
 	ID                uuid.UUID
 	BidMicro          int64
@@ -45,9 +27,6 @@ type voseAliasTable struct {
 	alias     []int
 }
 
-// HybridBalancer stores an atomic pointer to a voseAliasTable snapshot. UpdateCampaigns
-// replaces the pointer in one atomic store; SelectAndShard loads it without locking.
-// randPool provides per-call PRNG instances to avoid sharing state across goroutines.
 type HybridBalancer struct {
 	totalShards   int
 	maxRpsPerNode int64
@@ -72,10 +51,6 @@ func NewHybridBalancer(totalShards int, maxRpsPerNode int) *HybridBalancer {
 	}
 }
 
-// UpdateCampaigns builds a new Vose alias table from campaigns and atomically
-// replaces the current snapshot. secondsElapsed and totalSeconds parameterise
-// the pacing sinusoid; if totalSeconds is 0 the pacing factor degenerates to 0.
-// Invalid (nil) campaign pointers are silently filtered before weight computation.
 func (hb *HybridBalancer) UpdateCampaigns(campaigns []*CampaignMeta, secondsElapsed int64, totalSeconds int64) {
 
 	validCampaigns := make([]*CampaignMeta, 0, len(campaigns))
@@ -175,12 +150,7 @@ func (hb *HybridBalancer) UpdateCampaigns(campaigns []*CampaignMeta, secondsElap
 	})
 }
 
-// SelectAndShard samples a campaign from the alias table and maps it to a Redis shard.
-// For normal load the shard is the deterministic jump-hash of the campaign ID.
-// For hot load (currentCampaignRps > maxRpsPerNode), a FNV32a hash of userID selects
-// a sub-shard; the campaign's jump-hash and the sub-shard index are XOR-combined
-// before the final jump-hash call to spread the load across shards.
-// Returns (nil, 0) if no campaigns are registered.
+// Hot campaigns XOR user-keyed sub-shard into jump-hash to spread load across Redis keys.
 func (hb *HybridBalancer) SelectAndShard(userID string, currentCampaignRps int64) (*CampaignMeta, int) {
 	table := hb.aliasTable.Load()
 	if table == nil || len(table.prob) == 0 {

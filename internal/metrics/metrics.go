@@ -1,20 +1,3 @@
-// Package metrics declares all Prometheus metrics for the eSPX pipeline.
-// Metrics are registered at package initialisation via promauto (no explicit
-// registration call required). All counter and histogram names follow the
-// ad_<subsystem>_<metric> convention:
-//
-//	ad_http_*           HTTP layer counters/histograms (tracker + net/http path).
-//	ad_events_*         Stream ingestion throughput and drop counters.
-//	ad_filter_*         Filter engine decisions and blocked-event breakdown.
-//	ad_db_*             PostgreSQL and ClickHouse write latency and error counts.
-//	ad_circuit_breaker_* Circuit breaker state gauge (0=closed, 1=open, 2=half-open).
-//	ad_dlq_*            Dead-letter queue depth.
-//	ad_management_*     Management service business metrics (commissions, top-ups).
-//	ad_reconciliation_* Data-drift gauges and correction counters.
-//	ad_gnet_*           gnet event-loop counters (packets, bytes, connections).
-//	ad_redis_lua_*      Redis Lua script execution duration histogram.
-//	ad_registry_*       Campaign registry sync lag.
-//	ad_uuid_*           NewFastUUID generation duration (nanosecond-scale buckets).
 package metrics
 
 import (

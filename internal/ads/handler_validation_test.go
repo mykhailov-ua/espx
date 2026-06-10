@@ -54,7 +54,7 @@ func (m *mockValidationConn) RemoteAddr() net.Addr {
 
 func TestAdsPacketHandler_Validation(t *testing.T) {
 	cfg := &config.Config{
-		MaxRequestBodySize: 100, // Small limit for testing
+		MaxRequestBodySize: 100,
 	}
 	registry := &mockRegistry{}
 	sharder := NewJumpHashSharder(1)
@@ -88,7 +88,6 @@ func TestAdsPacketHandler_Validation(t *testing.T) {
 	})
 
 	t.Run("POST /track too large -> 413 Payload Too Large", func(t *testing.T) {
-		// body of 105 bytes, which exceeds MaxRequestBodySize (100)
 		body := make([]byte, 105)
 		req := []byte("POST /track HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 105\r\n\r\n")
 		req = append(req, body...)

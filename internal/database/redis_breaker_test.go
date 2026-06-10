@@ -44,7 +44,7 @@ func TestRedisBreaker_TransitionsToHalfOpen(t *testing.T) {
 	assert.True(t, b.Allow())
 	assert.Equal(t, CircuitHalfOpen, b.State())
 
-	assert.True(t, b.Allow()) // Allow is true during HalfOpen to send probes
+	assert.True(t, b.Allow())
 }
 
 func TestRedisBreaker_HalfOpenFailureReopens(t *testing.T) {
@@ -73,7 +73,7 @@ func TestRedisBreaker_HalfOpenSuccessCloses(t *testing.T) {
 	b.RecordSuccess()
 	assert.Equal(t, CircuitHalfOpen, b.State())
 
-	require.True(t, b.Allow()) // Call Allow in HalfOpen state
+	require.True(t, b.Allow())
 	b.RecordSuccess()
 	assert.Equal(t, CircuitClosed, b.State())
 	assert.True(t, b.Allow())

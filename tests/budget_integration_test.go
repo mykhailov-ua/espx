@@ -29,7 +29,7 @@ func TestBudgetFlow_Integration(t *testing.T) {
 	queries := db.New(dbPool)
 	campaignRepo := ads.NewCampaignRepo(queries)
 	customerRepo := ads.NewCustomerRepo(queries)
-	registry := ads.NewRegistry(queries)
+	registry := newTestRegistry(t, queries)
 
 	budgetManager := ads.NewRedisBudgetManager(rdb, campaignRepo, 10*time.Second)
 	syncWorker := ads.NewSyncWorker(rdb, campaignRepo, customerRepo, 100*time.Millisecond)

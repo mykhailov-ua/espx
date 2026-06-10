@@ -40,22 +40,29 @@ func (w *NginxConfigWorker) Start(ctx context.Context, interval time.Duration) {
 }
 
 func (w *NginxConfigWorker) ExportAndReload(ctx context.Context) error {
-	if len(w.svc.rdbs) == 0 || w.svc.rdbs[0] == nil {
+	if len(w.svc.rdbs) == 0 {
 		return fmt.Errorf("no redis client available")
 	}
-	rdb := w.svc.rdbs[0]
 
-	manual, err := rdb.SMembers(ctx, "blacklist:manual").Result()
-	if err != nil {
-		return fmt.Errorf("failed to fetch manual blacklist: %w", err)
+	var manual []string
+	for _, rdb := range w.svc.rdbs {
+		m, err := rdb.SMembers(ctx, "blacklist:manual").Result()
+		if err != nil {
+			return fmt.Errorf("failed to fetch manual blacklist from shard: %w", err)
+		}
+		manual = append(manual, m...)
 	}
 	if err := w.writeDenyFile("manual.conf", manual); err != nil {
 		return err
 	}
 
-	auto, err := rdb.SMembers(ctx, "blacklist:auto").Result()
-	if err != nil {
-		return fmt.Errorf("failed to fetch auto blacklist: %w", err)
+	var auto []string
+	for _, rdb := range w.svc.rdbs {
+		a, err := rdb.SMembers(ctx, "blacklist:auto").Result()
+		if err != nil {
+			return fmt.Errorf("failed to fetch auto blacklist from shard: %w", err)
+		}
+		auto = append(auto, a...)
 	}
 	if err := w.writeDenyFile("auto.conf", auto); err != nil {
 		return err

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"espx/internal/ads"
+	"espx/internal/ads/db"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/testcontainers/testcontainers-go"
@@ -15,6 +17,13 @@ import (
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+func newTestRegistry(t *testing.T, repo db.Querier) *ads.CampaignRegistry {
+	t.Helper()
+	r := ads.NewRegistry(repo)
+	r.SetReplicaPath(filepath.Join(t.TempDir(), "campaigns_replica.json"))
+	return r
+}
 
 func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 	ctx := context.Background()

@@ -12,6 +12,7 @@ import (
 )
 
 const createCampaign = `-- name: CreateCampaign :one
+
 INSERT INTO campaigns (id, name, budget_limit, status, customer_id, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 RETURNING id, name, status, budget_limit, created_at, updated_at, customer_id, current_spend, deleted_at, pacing_mode, daily_budget, timezone, freq_limit, freq_window, target_countries, brand_id, brand_fcap_key
@@ -33,6 +34,17 @@ type CreateCampaignParams struct {
 	BrandFcapKey    string             `json:"brand_fcap_key"`
 }
 
+// events.sql: sqlc query definitions for campaign and event persistence.
+// All event writes target the PARTITION BY RANGE (created_date) table; callers
+// must supply created_date explicitly to guarantee correct partition routing.
+// ON CONFLICT (click_id, created_date) DO NOTHING provides idempotency within
+// the daily partition boundary.
+//
+// InsertEventsBatch is the primary batch-write path. The CTE uses RETURNING to
+// count only newly-inserted rows for campaign_stats aggregation; this prevents
+// double-counting when the same batch is retried. The EXISTS sub-select on campaigns
+// filters orphaned campaign_ids before the stats INSERT to avoid FK violations
+// rolling back the entire batch.
 func (q *Queries) CreateCampaign(ctx context.Context, arg CreateCampaignParams) (Campaign, error) {
 	row := q.db.QueryRow(ctx, createCampaign,
 		arg.ID,
@@ -198,6 +210,7 @@ stats AS (
 INSERT INTO campaign_stats (campaign_id, date, impressions_count, clicks_count, conversions_count)
 SELECT campaign_id, event_date, imps, clicks, convs
 FROM stats
+ORDER BY campaign_id, event_date
 ON CONFLICT (campaign_id, date) DO UPDATE SET
     impressions_count = campaign_stats.impressions_count + EXCLUDED.impressions_count,
     clicks_count = campaign_stats.clicks_count + EXCLUDED.clicks_count,

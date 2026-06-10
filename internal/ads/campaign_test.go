@@ -2,6 +2,7 @@ package ads
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -30,6 +31,13 @@ func (m *MockRepo) ListActiveCampaigns(ctx context.Context) ([]db.Campaign, erro
 	return res, m.err
 }
 
+func newTestRegistry(t *testing.T, repo db.Querier) *CampaignRegistry {
+	t.Helper()
+	r := NewRegistry(repo)
+	r.SetReplicaPath(filepath.Join(t.TempDir(), "campaigns_replica.json"))
+	return r
+}
+
 func TestRegistry_Sync(t *testing.T) {
 	id1 := uuid.New()
 	id2 := uuid.New()
@@ -40,7 +48,7 @@ func TestRegistry_Sync(t *testing.T) {
 		},
 	}
 
-	r := NewRegistry(mock)
+	r := newTestRegistry(t, mock)
 	count, err := r.Sync(context.Background())
 
 	require.NoError(t, err)
@@ -56,7 +64,7 @@ func TestRegistry_StartSync(t *testing.T) {
 		ids: []pgtype.UUID{{Bytes: id1, Valid: true}},
 	}
 
-	r := NewRegistry(mock)
+	r := newTestRegistry(t, mock)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	r.StartSync(ctx, 10*time.Millisecond)

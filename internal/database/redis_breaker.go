@@ -1,15 +1,3 @@
-// Package database provides a lock-free Redis circuit breaker implemented with
-// sync/atomic operations. Unlike the mutex-based ads.CircuitBreaker, this breaker
-// uses CAS (CompareAndSwap) for state transitions to avoid lock contention on the
-// critical Redis command path.
-//
-// The breaker is installed as a redis.UniversalClient hook via RedisCircuitBreakerHook.
-// The hook intercepts ProcessHook and ProcessPipelineHook; transport errors
-// (network, EOF, connection refused) increment the failure counter while
-// redis.Nil and business-logic errors are treated as successes.
-//
-// IsNetworkOrSystemError classifies errors by type (net.Error, context.Canceled)
-// and by string-pattern matching for error types not wrapped in a net.Error.
 package database
 
 import (
@@ -46,10 +34,7 @@ func (s CircuitState) String() string {
 	}
 }
 
-// RedisBreaker is a lock-free circuit breaker for Redis clients. All fields are
-// accessed exclusively via sync/atomic; no mutex is held during Allow, RecordSuccess,
-// or RecordFailure. State transitions from Open -> HalfOpen use CompareAndSwap to
-// prevent multiple goroutines from entering HalfOpen simultaneously.
+// RedisBreaker uses atomic CAS for Open->HalfOpen so only one probe goroutine wins.
 type RedisBreaker struct {
 	state            int32
 	failures         int64
@@ -73,9 +58,6 @@ func (b *RedisBreaker) State() CircuitState {
 	return CircuitState(atomic.LoadInt32(&b.state))
 }
 
-// Allow returns true if the breaker permits a Redis operation. In the Open state,
-// it tests whether openTimeout has elapsed and if so performs a CAS to transition
-// to HalfOpen, returning true only for the single goroutine that wins the CAS.
 func (b *RedisBreaker) Allow() bool {
 	state := atomic.LoadInt32(&b.state)
 	if state == int32(CircuitClosed) {
@@ -168,9 +150,6 @@ func IsNetworkOrSystemError(err error) bool {
 	return false
 }
 
-// RedisCircuitBreakerHook implements redis.Hook and injects breaker logic into
-// every command dispatched through the client. It must be added via client.AddHook
-// before any commands are issued.
 type RedisCircuitBreakerHook struct {
 	breaker *RedisBreaker
 }

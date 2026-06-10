@@ -62,7 +62,7 @@ func main() {
 			slog.Error("failed to connect to redis shard", "addr", addr, "error", rdbErr)
 			os.Exit(1)
 		}
-		breaker := database.NewRedisBreaker(50, 3, 5*time.Second)
+		breaker := database.NewRedisBreaker(10000, 10, 5*time.Second)
 		rdb.AddHook(database.NewRedisCircuitBreakerHook(breaker))
 		rdbs = append(rdbs, rdb)
 	}

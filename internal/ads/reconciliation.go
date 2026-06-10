@@ -1,16 +1,3 @@
-// Package ads implements ReconciliationWorker, a periodic data-integrity agent that
-// compares PostgreSQL spend totals against ClickHouse aggregated event volumes to
-// detect financial drift. Drift is defined as:
-//
-//	abs(pgSpend - chSpend) / pgSpend
-//
-// If drift exceeds driftLimit, a structured CRITICAL warning is emitted and the
-// ad_reconciliation_drift_ratio gauge is updated. The ClickHouse query uses a lag
-// offset (typically 5-10 minutes) to account for batched writes and replication lag
-// before the aggregates are considered stable.
-//
-// ReconciliationWorker does not auto-correct spend totals; it is a read-only
-// diagnostic tool. Financial corrections are performed by SnapshotReplicator.
 package ads
 
 import (
@@ -24,10 +11,7 @@ import (
 	"espx/internal/metrics"
 )
 
-// ReconciliationWorker compares PostgreSQL and ClickHouse spend per active campaign.
-// driftLimit is the fractional threshold above which a CRITICAL log is emitted.
-// lag is subtracted from time.Now() before querying ClickHouse to avoid reading
-// partially-flushed batches that would inflate the apparent drift.
+// lag avoids comparing against partially-flushed ClickHouse batches.
 type ReconciliationWorker struct {
 	pgConn     PostgresConn
 	chConn     ClickHouseConn
@@ -55,9 +39,6 @@ func NewReconciliationWorker(
 	}
 }
 
-// Reconcile runs one reconciliation pass across all active campaigns. Each campaign
-// gets an individual Prometheus gauge update; campaigns with drift > driftLimit
-// trigger a WARN log with pg_spend, ch_spend, and drift_ratio fields.
 func (rw *ReconciliationWorker) Reconcile(ctx context.Context) error {
 	campaigns, err := rw.repo.ListActive(ctx)
 	if err != nil {

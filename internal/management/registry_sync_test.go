@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func TestRegistryWatch(t *testing.T) {
 
 	queries := db.New(pool)
 	registry := ads.NewRegistry(queries)
+	registry.SetReplicaPath(filepath.Join(t.TempDir(), "campaigns_replica.json"))
 
 	channel := "test:campaign:updates"
 	registry.StartWatch(ctx, rdb, channel)
