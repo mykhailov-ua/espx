@@ -8,17 +8,20 @@ import (
 	"github.com/google/uuid"
 )
 
+type contextKey string
+
+const DeduplicationTokenKey contextKey = "dedup_token"
+
 type Event struct {
-	ClickID      string
-	CampaignID   uuid.UUID
-	UserID       string
-	Type         string
-	Payload      []byte
-	IP           string
-	UA           string
-	FraudReason  string
-	CreatedAt    time.Time
-	InsertedToCH bool
+	ClickID     string
+	CampaignID  uuid.UUID
+	UserID      string
+	Type        string
+	Payload     []byte
+	IP          string
+	UA          string
+	FraudReason string
+	CreatedAt   time.Time
 }
 
 func (e *Event) Reset() {
@@ -35,7 +38,6 @@ func (e *Event) Reset() {
 	e.UA = ""
 	e.FraudReason = ""
 	e.CreatedAt = time.Time{}
-	e.InsertedToCH = false
 }
 
 var EventPool = sync.Pool{

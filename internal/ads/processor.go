@@ -363,6 +363,9 @@ func (p *StreamConsumer) tryFlush(ctx context.Context, batch *[]*domain.Event, m
 
 			singleBatch[0] = e
 			singleCtx, singleCancel := context.WithTimeout(ctx, p.writeTimeout)
+			if len(*msgIDs) > i {
+				singleCtx = context.WithValue(singleCtx, domain.DeduplicationTokenKey, (*msgIDs)[i])
+			}
 			if singleErr := p.store.StoreBatch(singleCtx, singleBatch); singleErr != nil {
 				singleCancel()
 				failedIndices = append(failedIndices, i)
@@ -669,6 +672,10 @@ func (p *StreamConsumer) flushBatch(ctx context.Context, batch []*domain.Event, 
 	slog.Debug("flushing batch", "group", p.groupName, "batch_size", len(batch), "first_ids", firstN(msgIDs, 5))
 
 	storeCtx, storeCancel := context.WithTimeout(ctx, p.writeTimeout)
+	if len(msgIDs) > 0 {
+		token := fmt.Sprintf("%s_%s_%d", msgIDs[0], msgIDs[len(msgIDs)-1], len(msgIDs))
+		storeCtx = context.WithValue(storeCtx, domain.DeduplicationTokenKey, token)
+	}
 	defer storeCancel()
 
 	err := p.store.StoreBatch(storeCtx, batch)

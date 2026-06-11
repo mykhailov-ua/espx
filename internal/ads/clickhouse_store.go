@@ -2,6 +2,9 @@ package ads
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -21,7 +24,6 @@ var slicePool = sync.Pool{
 }
 
 // writeTimeout must cover worst-case round-trip under load; too low spuriously trips the circuit breaker.
-// Events with InsertedToCH set are skipped to ensure exactly-once insertion across consumer retries.
 type ClickHouseStore struct {
 	conn          driver.Conn
 	writeTimeout  time.Duration
@@ -186,9 +188,6 @@ func (s *ClickHouseStore) backgroundFlusher() {
 			for {
 				select {
 				case e := <-s.eventChan:
-					if e.InsertedToCH {
-						continue
-					}
 					if e.FraudReason != "" {
 						*pFraud = append(*pFraud, e)
 					} else {
@@ -210,9 +209,6 @@ func (s *ClickHouseStore) backgroundFlusher() {
 			return
 
 		case e := <-s.eventChan:
-			if e.InsertedToCH {
-				continue
-			}
 			if e.FraudReason != "" {
 				*pFraud = append(*pFraud, e)
 				if len(*pFraud) >= s.getBatchSize() {
@@ -286,10 +282,33 @@ func (s *ClickHouseStore) flushTableWithRetry(table string, evts []*domain.Event
 	metrics.DbWriteErrors.WithLabelValues("clickhouse").Inc()
 }
 
+func (s *ClickHouseStore) getDeduplicationToken(ctx context.Context, events []*domain.Event) string {
+	if token, ok := ctx.Value(domain.DeduplicationTokenKey).(string); ok && token != "" {
+		return token
+	}
+	if len(events) == 0 {
+		return ""
+	}
+	h := sha256.New()
+	for _, e := range events {
+		h.Write([]byte(e.ClickID))
+		var buf [8]byte
+		binary.BigEndian.PutUint64(buf[:], uint64(e.CreatedAt.UnixNano()))
+		h.Write(buf[:])
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func (s *ClickHouseStore) insertTable(ctx context.Context, table string, evts []*domain.Event, isFraud bool) error {
 	start := time.Now()
 
-	batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s", table))
+	token := s.getDeduplicationToken(ctx, evts)
+	query := fmt.Sprintf("INSERT INTO %s", table)
+	if token != "" {
+		query = fmt.Sprintf("INSERT INTO %s SETTINGS insert_deduplicate=1, insert_deduplication_token='%s'", table, token)
+	}
+
+	batch, err := s.conn.PrepareBatch(ctx, query)
 	if err != nil {
 		return fmt.Errorf("prepare batch %s: %w", table, err)
 	}
@@ -329,9 +348,6 @@ func (s *ClickHouseStore) insertTable(ctx context.Context, table string, evts []
 	duration := time.Since(start).Seconds()
 	metrics.DbWriteDuration.WithLabelValues("clickhouse").Observe(duration)
 
-	for _, e := range evts {
-		e.InsertedToCH = true
-	}
 	return nil
 }
 
@@ -385,9 +401,6 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 
 	for i := range events {
 		e := events[i]
-		if e.InsertedToCH {
-			continue
-		}
 		if e.FraudReason != "" {
 			fraud = append(fraud, e)
 			continue
@@ -410,7 +423,13 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 			return nil
 		}
 
-		batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s", table))
+		token := s.getDeduplicationToken(ctx, evts)
+		query := fmt.Sprintf("INSERT INTO %s", table)
+		if token != "" {
+			query = fmt.Sprintf("INSERT INTO %s SETTINGS insert_deduplicate=1, insert_deduplication_token='%s'", table, token)
+		}
+
+		batch, err := s.conn.PrepareBatch(ctx, query)
 		if err != nil {
 			return fmt.Errorf("prepare batch %s: %w", table, err)
 		}
@@ -445,9 +464,6 @@ func (s *ClickHouseStore) insertToClickHouse(ctx context.Context, events []*doma
 
 		if err := batch.Send(); err != nil {
 			return fmt.Errorf("send %s: %w", table, err)
-		}
-		for _, e := range evts {
-			e.InsertedToCH = true
 		}
 		return nil
 	}
