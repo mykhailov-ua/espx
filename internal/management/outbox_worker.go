@@ -39,6 +39,7 @@ func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 	}
 
 	go func() {
+		slog.Info("outbox worker starting polling loop", "interval", interval)
 		for {
 			select {
 			case <-ctx.Done():
@@ -46,45 +47,31 @@ func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 			default:
 			}
 
-			conn, err := w.svc.pool.Acquire(ctx)
+			processed, err := w.ProcessOutboxWithCount(ctx, 1000)
 			if err != nil {
-				slog.Error("failed to acquire connection for outbox listen, retrying in 2s", "error", err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-
-			_, err = conn.Exec(ctx, "LISTEN outbox_channel")
-			if err != nil {
-				conn.Release()
-				slog.Error("failed to execute LISTEN on outbox channel, retrying in 2s", "error", err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-
-			slog.Info("outbox worker listening for real-time events via pg_notify")
-
-			for {
+				if ctx.Err() != nil {
+					return
+				}
+				if strings.Contains(err.Error(), "closed pool") {
+					return
+				}
+				slog.Error("outbox polling loop iteration failed, retrying in 2s", "error", err)
 				select {
 				case <-ctx.Done():
-					conn.Release()
 					return
-				default:
+				case <-time.After(2 * time.Second):
 				}
+				continue
+			}
 
-				_, err := conn.Conn().WaitForNotification(ctx)
-				if err != nil {
-					conn.Release()
-					if ctx.Err() != nil {
-						return
-					}
-					slog.Error("outbox listen connection lost, reconnecting in 2s", "error", err)
-					time.Sleep(2 * time.Second)
-					break
-				}
+			if processed > 0 {
+				continue
+			}
 
-				if err := w.ProcessOutbox(ctx); err != nil {
-					slog.Error("failed to process outbox after notification", "error", err)
-				}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(interval):
 			}
 		}
 	}()
@@ -111,27 +98,35 @@ func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 }
 
 func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
+	_, err := w.ProcessOutboxWithCount(ctx, 1000)
+	return err
+}
+
+func (w *OutboxWorker) ProcessOutboxWithCount(ctx context.Context, limit int32) (int, error) {
 	var events []db.OutboxEvent
 
 	err := pgx.BeginFunc(ctx, w.svc.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		var err error
-		events, err = q.GetPendingOutboxEventsForUpdate(ctx, 100)
+		events, err = q.GetPendingOutboxEventsForUpdate(ctx, limit)
 		if err != nil || len(events) == 0 {
 			return err
 		}
 
-		for _, ev := range events {
-			_, err = tx.Exec(ctx, "UPDATE outbox_events SET status = 'PROCESSING' WHERE id = $1", ev.ID)
-			if err != nil {
-				return err
-			}
+		ids := make([]int64, len(events))
+		for i, ev := range events {
+			ids[i] = ev.ID
+		}
+
+		_, err = tx.Exec(ctx, "UPDATE outbox_events SET status = 'PROCESSING' WHERE id = ANY($1)", ids)
+		if err != nil {
+			return err
 		}
 		return nil
 	})
 
 	if err != nil || len(events) == 0 {
-		return err
+		return 0, err
 	}
 
 	processedIDs := make([]int64, 0, len(events))
@@ -277,7 +272,7 @@ func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
 		}
 	}
 
-	return nil
+	return len(processedIDs), nil
 }
 
 func ToUUID(u uuid.UUID) pgtype.UUID {
