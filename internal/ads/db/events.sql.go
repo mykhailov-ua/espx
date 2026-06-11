@@ -302,11 +302,19 @@ func (q *Queries) UpdateCampaignStats(ctx context.Context, arg UpdateCampaignSta
 const updateCampaignStatsBatch = `-- name: UpdateCampaignStatsBatch :exec
 INSERT INTO campaign_stats (campaign_id, date, impressions_count, clicks_count, conversions_count)
 SELECT 
-    unnest($1::uuid[]),
+    val.campaign_id,
     CURRENT_DATE,
-    unnest($2::bigint[]),
-    unnest($3::bigint[]),
-    unnest($4::bigint[])
+    val.impression,
+    val.click,
+    val.conversion
+FROM (
+    SELECT 
+        unnest($1::uuid[]) as campaign_id,
+        unnest($2::bigint[]) as impression,
+        unnest($3::bigint[]) as click,
+        unnest($4::bigint[]) as conversion
+) val
+ORDER BY val.campaign_id
 ON CONFLICT (campaign_id, date) DO UPDATE SET
     impressions_count = campaign_stats.impressions_count + EXCLUDED.impressions_count,
     clicks_count = campaign_stats.clicks_count + EXCLUDED.clicks_count,

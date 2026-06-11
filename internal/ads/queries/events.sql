@@ -44,11 +44,19 @@ SELECT id FROM campaigns WHERE status = 'ACTIVE';
 -- name: UpdateCampaignStatsBatch :exec
 INSERT INTO campaign_stats (campaign_id, date, impressions_count, clicks_count, conversions_count)
 SELECT 
-    unnest(@campaign_ids::uuid[]),
+    val.campaign_id,
     CURRENT_DATE,
-    unnest(@impressions::bigint[]),
-    unnest(@clicks::bigint[]),
-    unnest(@conversions::bigint[])
+    val.impression,
+    val.click,
+    val.conversion
+FROM (
+    SELECT 
+        unnest(@campaign_ids::uuid[]) as campaign_id,
+        unnest(@impressions::bigint[]) as impression,
+        unnest(@clicks::bigint[]) as click,
+        unnest(@conversions::bigint[]) as conversion
+) val
+ORDER BY val.campaign_id
 ON CONFLICT (campaign_id, date) DO UPDATE SET
     impressions_count = campaign_stats.impressions_count + EXCLUDED.impressions_count,
     clicks_count = campaign_stats.clicks_count + EXCLUDED.clicks_count,
