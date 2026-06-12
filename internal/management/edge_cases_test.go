@@ -213,3 +213,61 @@ func TestEdge_OutboxPartialRedisFailure(t *testing.T) {
 	assert.Equal(t, "PROCESSED", statuses[2])
 	assert.Equal(t, "PENDING", statuses[1])
 }
+
+func TestEdge_OutboxWorkerRecoveryOfProcessingEvents(t *testing.T) {
+	pool, cleanupDB := database.SetupTestDB(t)
+	defer cleanupDB()
+	rdb, cleanupRedis := database.SetupTestRedis(t)
+	defer cleanupRedis()
+
+	cfg := &config.Config{
+		CampaignUpdateChannel: "campaigns:update-test",
+	}
+	svc := NewService(pool, []redis.UniversalClient{rdb}, ads.NewJumpHashSharder(1), cfg)
+	defer svc.Close()
+
+	ctx := context.Background()
+	queries := db.New(pool)
+
+	payload := CampaignPayload{
+		CampaignID:  uuid.New().String(),
+		BudgetLimit: 50_000_000,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	row, err := queries.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{
+		EventType: "CREATE_CAMPAIGN",
+		Payload:   payloadBytes,
+	})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, "UPDATE outbox_events SET status = 'PROCESSING', created_at = NOW() - INTERVAL '10 minutes' WHERE id = $1", row.ID)
+	require.NoError(t, err)
+
+	worker := NewOutboxWorker(svc)
+
+	processed, err := worker.ProcessOutboxWithCount(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, 0, processed, "Normal polling must ignore 'PROCESSING' events")
+
+	var status string
+	err = pool.QueryRow(ctx, "SELECT status FROM outbox_events WHERE id = $1", row.ID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "PROCESSING", status)
+
+	_, err = pool.Exec(ctx, "UPDATE outbox_events SET status = 'PENDING' WHERE status = 'PROCESSING' AND created_at < NOW() - INTERVAL '1 minute'")
+	require.NoError(t, err)
+
+	err = pool.QueryRow(ctx, "SELECT status FROM outbox_events WHERE id = $1", row.ID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "PENDING", status, "Recovery query must revert expired 'PROCESSING' events to 'PENDING'")
+
+	processed, err = worker.ProcessOutboxWithCount(ctx, 10)
+	require.NoError(t, err)
+	assert.Equal(t, 1, processed, "Reverted event must be processed successfully")
+
+	err = pool.QueryRow(ctx, "SELECT status FROM outbox_events WHERE id = $1", row.ID).Scan(&status)
+	require.NoError(t, err)
+	assert.Equal(t, "PROCESSED", status)
+}
