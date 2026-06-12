@@ -99,6 +99,12 @@ Compare baseline and branch benchmarks locally:
 go run scripts/perf_gate.go baseline_bench.txt pr_bench.txt
 ```
 
+Verify `0 B/op` benchmarks and allocation/escape behavior locally:
+```bash
+go test -bench=. -benchmem ./...
+go build -gcflags="-m" ./...
+```
+
 ---
 
 ## Operations and Infrastructure
@@ -111,7 +117,7 @@ The production image built via `Dockerfile` uses a statically linked, debian-dis
 ### Log Evacuation Procedures
 - **Hetzner Storage Box Setup**: Generate a passphrase-less Ed25519 SSH key (`~/.ssh/storagebox_id`), register the public key in Hetzner Robot Console, and set `STORAGE_BOX_SSH_KEY_PATH=/root/.ssh/storagebox_id` in `.env`.
 - **Cron Evacuation Trigger**: Copy `deploy/cron/log-evacuate.cron` to `/etc/cron.d/log-evacuate` (chmod `0644`). It re-runs every 5 minutes logging execution status to `/var/log/espx-evacuate.log`.
-- **Claim Renaming Details**: Active log files are compressed and encrypted directly by the logger. Rotated files are renamed with the suffix `.log.zst.ready`. The evacuator script claims these by renaming to `*.log.zst.evacuating` and uploads them via `rsync`. Local source files are deleted upon successful transfer.
+- **Claim Renaming Details**: Active log files are written directly as raw `.log` files. Once rotated, a dedicated background compressor worker (`StartCompressorWorker`) asynchronously compresses rotated segments with `zstd` and encrypts them with `AES-GCM` using the 12-byte incrementing nonce. The output is named `.log.zst.ready` and the original raw file is deleted. The evacuator script claims these ready files by renaming them to `*.log.zst.evacuating` and uploads them via `rsync`. Local source files are deleted upon successful transfer.
 - **Recovering Locked Segments**: If a crash halts upload, manually rename stuck `.evacuating` files back to `.ready` to trigger a retry.
 - **Log Retention Policy**: There is no automatic retention on the Hetzner Storage Box. Manually execute purges via SSH or schedule periodic cleanups for segments older than the desired threshold.
 
