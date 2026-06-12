@@ -38,8 +38,6 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 
 	const eventCount = 100
 
-	t.Log("MEASURING TRANSACTION TIMES: Standard Outbox vs Decoupled Outbox")
-
 	seedEvents(t, pool, eventCount)
 
 	worker := NewOutboxWorker(svc)
@@ -48,10 +46,7 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 	err := worker.ProcessOutbox(ctx)
 	require.NoError(t, err)
 	durationNormal := time.Since(start)
-	t.Logf("[Baseline Redis] Processed %d events in standard outbox loop.", eventCount)
-	t.Logf("-> Active PG Transaction Duration: %v (%.3f ms/op)", durationNormal, float64(durationNormal.Nanoseconds())/1e6/float64(eventCount))
-
-	t.Log("\nSIMULATING LOCK CONTENTION & CONNECTION STARVATION UNDER REDIS LATENCY (50ms)")
+	t.Logf("processed %d events in %v (%.3f ms/op)", eventCount, durationNormal, float64(durationNormal.Nanoseconds())/1e6/float64(eventCount))
 
 	seedEvents(t, pool, 10)
 
@@ -74,13 +69,11 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 
 			close(lockedSignal)
 
-			// Wait for Worker 2 to start its transaction
 			select {
 			case <-tx2Started:
 			case <-time.After(2 * time.Second):
 			}
 
-			// Sleep a tiny bit to let Worker 2 get blocked on the lock
 			time.Sleep(50 * time.Millisecond)
 
 			for _, ev := range events {
@@ -101,7 +94,7 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 
 		tx2Start = time.Now()
 		_ = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
-			close(tx2Started) // Signal that Worker 2 is about to block on Exec
+			close(tx2Started)
 
 			_, _ = tx.Exec(ctx, "SELECT id FROM outbox_events WHERE status = 'PENDING' FOR UPDATE")
 			return nil
@@ -111,8 +104,8 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 
 	wg.Wait()
 
-	t.Logf("Worker 1 Transaction Hold Time (Simulated Redis Delay): %v", tx1End.Sub(tx1Start))
-	t.Logf("Worker 2 Transaction Blocked Duration (Waiting for Locks): %v", tx2End.Sub(tx2Start))
+	t.Logf("worker 1 transaction hold time: %v", tx1End.Sub(tx1Start))
+	t.Logf("worker 2 blocked duration: %v", tx2End.Sub(tx2Start))
 	require.True(t, tx2End.Sub(tx2Start) >= 30*time.Millisecond, "Worker 2 should have been blocked waiting for Worker 1's lock release")
 }
 
@@ -157,14 +150,12 @@ FOR UPDATE SKIP LOCKED;`)
 	require.NoError(t, err)
 	defer row.Close()
 
-	t.Log("================ EXPLAIN ANALYZE ================")
 	for row.Next() {
 		var planLine string
 		err := row.Scan(&planLine)
 		require.NoError(t, err)
 		t.Log(planLine)
 	}
-	t.Log("=================================================")
 }
 
 func BenchmarkProcessOutbox(b *testing.B) {

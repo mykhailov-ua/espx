@@ -50,7 +50,7 @@ func TestDLQBackupMetrics(t *testing.T) {
 	jsonlPath := filepath.Join(tempDir, "backup.jsonl")
 	binPath := filepath.Join(tempDir, "backup.bin")
 
-	t.Log("MEASURING WRITE SPEED & FILE SIZE")
+	t.Log("write speed and file size")
 
 	startJSONWrite := time.Now()
 	jsonFile, err := os.Create(jsonlPath)
@@ -110,12 +110,10 @@ func TestDLQBackupMetrics(t *testing.T) {
 	jsonInfo, _ := os.Stat(jsonlPath)
 	binInfo, _ := os.Stat(binPath)
 
-	t.Logf("[JSONL Backup]  Time: %v, Size: %.2f KB", durJSONWrite, float64(jsonInfo.Size())/1024)
-	t.Logf("[Binary Backup] Time: %v, Size: %.2f KB", durBinWrite, float64(binInfo.Size())/1024)
-	t.Logf("-> Size Reduction: %.1f%%", float64(jsonInfo.Size()-binInfo.Size())/float64(jsonInfo.Size())*100)
-	t.Logf("-> Write Speedup: %.1fx", float64(durJSONWrite.Nanoseconds())/float64(durBinWrite.Nanoseconds()))
-
-	t.Log("\nMEASURING READ & DECODE (DESERIALIZATION) SPEED")
+	t.Logf("jsonl backup: time=%v size=%.2f KB", durJSONWrite, float64(jsonInfo.Size())/1024)
+	t.Logf("binary backup: time=%v size=%.2f KB", durBinWrite, float64(binInfo.Size())/1024)
+	t.Logf("size reduction: %.1f%%", float64(jsonInfo.Size()-binInfo.Size())/float64(jsonInfo.Size())*100)
+	t.Logf("write speedup: %.1fx", float64(durJSONWrite.Nanoseconds())/float64(durBinWrite.Nanoseconds()))
 
 	startJSONRead := time.Now()
 	jsonReadVal, err := os.Open(jsonlPath)
@@ -166,7 +164,7 @@ func TestDLQBackupMetrics(t *testing.T) {
 	binReadVal.Close()
 	durBinRead := time.Since(startBinRead)
 
-	t.Logf("[JSONL Read]   Decoded: %d events in %v", decodedJSONCount, durJSONRead)
-	t.Logf("[Binary Read]  Decoded: %d events in %v", decodedBinCount, durBinRead)
-	t.Logf("-> Read/Decode Speedup: %.1fx", float64(durJSONRead.Nanoseconds())/float64(durBinRead.Nanoseconds()))
+	t.Logf("jsonl read: decoded %d events in %v", decodedJSONCount, durJSONRead)
+	t.Logf("binary read: decoded %d events in %v", decodedBinCount, durBinRead)
+	t.Logf("read/decode speedup: %.1fx", float64(durJSONRead.Nanoseconds())/float64(durBinRead.Nanoseconds()))
 }

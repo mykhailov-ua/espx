@@ -168,8 +168,6 @@ ON CONFLICT (campaign_id, date) DO UPDATE SET
 	require.NoError(t, err)
 	defer rows.Close()
 
-	fmt.Println("==================================================")
-	fmt.Println("--- EXPLAIN FOR UpdateCampaignStatsBatch ---")
 	for rows.Next() {
 		var line string
 		err = rows.Scan(&line)
@@ -177,7 +175,6 @@ ON CONFLICT (campaign_id, date) DO UPDATE SET
 		fmt.Println(line)
 	}
 	require.NoError(t, rows.Err())
-	fmt.Println("==================================================")
 }
 
 func TestStats_DeadlockStress(t *testing.T) {

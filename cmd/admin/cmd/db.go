@@ -57,7 +57,7 @@ var seedCmd = &cobra.Command{
 		adsQueries := adsdb.New(tx)
 		authQueries := authdb.New(tx)
 
-		fmt.Println(" -> Seeding 100 Customers...")
+		fmt.Println("Seeding 100 customers...")
 		customerIDs := make([]uuid.UUID, 100)
 		for i := 1; i <= 100; i++ {
 			cID := uuid.New()
@@ -83,7 +83,7 @@ var seedCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Println(" -> Seeding 100 Users...")
+		fmt.Println("Seeding 100 users...")
 		for i := 1; i <= 100; i++ {
 			role := "advertiser"
 			if i <= 5 {
@@ -100,7 +100,7 @@ var seedCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Println(" -> Seeding 10 Advertiser Brands...")
+		fmt.Println("Seeding 10 advertiser brands...")
 		brandIDs := make([]uuid.UUID, 10)
 		for i := 1; i <= 10; i++ {
 			bID := uuid.New()
@@ -115,7 +115,7 @@ var seedCmd = &cobra.Command{
 			}
 		}
 
-		fmt.Println(" -> Seeding 1000 Campaigns...")
+		fmt.Println("Seeding 1000 campaigns...")
 		countries := []string{"US", "GB", "CA", "UA", "DE", "FR", "JP"}
 		pacingModes := []adsdb.PacingModeType{adsdb.PacingModeTypeASAP, adsdb.PacingModeTypeEVEN}
 
@@ -162,7 +162,7 @@ var seedCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("\nSeeding completed successfully!")
+		fmt.Println("Seeding completed")
 		fmt.Printf("Seed Database stats:\n  Customers: %d\n  Users:     %d\n  Brands:    %d\n  Campaigns: %d\n",
 			100, 100, 10, 1000)
 		return nil
