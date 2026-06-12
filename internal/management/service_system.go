@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"hash/crc32"
 	"log/slog"
 	"time"
 
@@ -50,9 +49,13 @@ func (s *Service) BlockIP(ctx context.Context, ip string, source string) error {
 	if len(s.rdbs) == 0 {
 		return fmt.Errorf("no redis client available")
 	}
-	shardIdx := crc32.ChecksumIEEE([]byte(ip)) % uint32(len(s.rdbs))
-	rdb := s.rdbs[shardIdx]
-	return rdb.SAdd(ctx, "blacklist:"+reason, ip).Err()
+	var lastErr error
+	for _, rdb := range s.rdbs {
+		if err := rdb.SAdd(ctx, "blacklist:"+reason, ip).Err(); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 func (s *Service) UnblockIP(ctx context.Context, ip string, source string) error {
@@ -82,9 +85,13 @@ func (s *Service) UnblockIP(ctx context.Context, ip string, source string) error
 	if len(s.rdbs) == 0 {
 		return fmt.Errorf("no redis client available")
 	}
-	shardIdx := crc32.ChecksumIEEE([]byte(ip)) % uint32(len(s.rdbs))
-	rdb := s.rdbs[shardIdx]
-	return rdb.SRem(ctx, "blacklist:"+reason, ip).Err()
+	var lastErr error
+	for _, rdb := range s.rdbs {
+		if err := rdb.SRem(ctx, "blacklist:"+reason, ip).Err(); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, settings map[string]string) error {
@@ -168,8 +175,9 @@ func (s *Service) SyncSystemState(ctx context.Context) error {
 		if reason == "" {
 			reason = "manual"
 		}
-		shardIdx := crc32.ChecksumIEEE([]byte(item.Ip)) % uint32(len(s.rdbs))
-		s.rdbs[shardIdx].SAdd(ctx, "blacklist:"+reason, item.Ip)
+		for _, rdb := range s.rdbs {
+			rdb.SAdd(ctx, "blacklist:"+reason, item.Ip)
+		}
 	}
 
 	st, err := q.GetAllSystemSettings(ctx)
