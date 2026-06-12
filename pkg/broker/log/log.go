@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -136,6 +137,10 @@ func NewSegment(dir string, baseOffset uint64, maxSegSize int64, indexInterval i
 			return nil, fmt.Errorf("log mmap failed: %w", err)
 		}
 
+		for i := 0; i < len(mmapData); i += 4096 {
+			_ = mmapData[i]
+		}
+
 		if indexSize < maxIdxSize {
 			if err := indexFile.Truncate(maxIdxSize); err != nil {
 				_ = syscall.Munmap(mmapData)
@@ -150,6 +155,10 @@ func NewSegment(dir string, baseOffset uint64, maxSegSize int64, indexInterval i
 			_ = logFile.Close()
 			_ = indexFile.Close()
 			return nil, fmt.Errorf("index mmap failed: %w", err)
+		}
+
+		for i := 0; i < len(mmapIndex); i += 4096 {
+			_ = mmapIndex[i]
 		}
 	} else {
 		if logSize > 0 {
@@ -234,9 +243,18 @@ func (s *Segment) Write(offset uint64, payload []byte) (int64, error) {
 		return 0, errors.New("segment space exhausted")
 	}
 
-	binary.BigEndian.PutUint32(s.mmapData[pos:pos+4], length)
-	binary.BigEndian.PutUint64(s.mmapData[pos+4:pos+12], offset)
-	copy(s.mmapData[pos+12:pos+int64(totalLen)], payload)
+	basePtr := unsafe.Pointer(unsafe.SliceData(s.mmapData))
+	recordPtr := unsafe.Pointer(uintptr(basePtr) + uintptr(pos))
+
+	*(*uint32)(recordPtr) = bits.ReverseBytes32(length)
+
+	offsetPtr := unsafe.Pointer(uintptr(recordPtr) + 4)
+	*(*uint64)(offsetPtr) = bits.ReverseBytes64(offset)
+
+	if payloadLen > 0 {
+		payloadDst := unsafe.Slice((*byte)(unsafe.Pointer(uintptr(recordPtr)+12)), payloadLen)
+		copy(payloadDst, payload)
+	}
 
 	// Release semantics: ensure the mmap payload is visible before logSize increments.
 	atomic.StoreInt64(&s.logSize, pos+int64(totalLen))
@@ -249,8 +267,13 @@ func (s *Segment) WriteIndexEntry(offset uint64, position int64) error {
 		return errors.New("index space exhausted")
 	}
 
-	binary.BigEndian.PutUint64(s.mmapIndex[idxSize:idxSize+8], offset)
-	binary.BigEndian.PutUint64(s.mmapIndex[idxSize+8:idxSize+16], uint64(position))
+	basePtr := unsafe.Pointer(unsafe.SliceData(s.mmapIndex))
+	entryPtr := unsafe.Pointer(uintptr(basePtr) + uintptr(idxSize))
+
+	*(*uint64)(entryPtr) = bits.ReverseBytes64(offset)
+
+	posPtr := unsafe.Pointer(uintptr(entryPtr) + 8)
+	*(*uint64)(posPtr) = bits.ReverseBytes64(uint64(position))
 
 	// Release semantics: ensure index bytes are visible before size updates.
 	atomic.StoreInt64(&s.indexSize, idxSize+16)
