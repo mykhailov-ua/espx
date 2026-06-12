@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
-
-	"github.com/klauspost/compress/zstd"
 )
 
 type AlignedBuffer struct {
@@ -190,22 +188,7 @@ func (l *Logger) writeBuffer(buf *AlignedBuffer) {
 	data := buf.Bytes()
 	start := time.Now()
 
-	enc := zstdEncoderPool.Get().(*zstd.Encoder)
-	l.compressBuf = enc.EncodeAll(data, l.compressBuf[:0])
-	zstdEncoderPool.Put(enc)
-	compressedData := l.compressBuf
-
-	totalLen := 4 + 12 + len(compressedData) + 16
-	if len(l.encryptBuf) < totalLen {
-		l.encryptBuf = make([]byte, totalLen+128)
-	}
-
-	l.incrementNonce()
-	binary.BigEndian.PutUint32(l.encryptBuf[0:4], uint32(12+len(compressedData)+16))
-	copy(l.encryptBuf[4:16], l.nonceBuf[:])
-	_ = l.cipherAEAD.Seal(l.encryptBuf[16:16], l.nonceBuf[:], compressedData, nil)
-
-	n, err := l.activeFile.Write(l.encryptBuf[:totalLen])
+	n, err := l.activeFile.Write(data)
 	if err == nil {
 		err = syscall.Fdatasync(int(l.activeFile.Fd()))
 	}
@@ -276,7 +259,7 @@ func (l *Logger) checkRotation() {
 	if sizeReached || timeReached {
 		_ = l.activeFile.Close()
 		timestamp := time.Now().Format("20060102-150405.000000000")
-		rotatedPath := filepath.Join(l.cfg.LogDir, fmt.Sprintf("segment_%s.log.zst.ready", timestamp))
+		rotatedPath := filepath.Join(l.cfg.LogDir, fmt.Sprintf("segment_%s.log", timestamp))
 		activePath := filepath.Join(l.cfg.LogDir, "active.log")
 		_ = os.Rename(activePath, rotatedPath)
 		LogRotationTotal.Inc()

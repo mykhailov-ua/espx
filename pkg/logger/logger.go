@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -236,11 +238,121 @@ func NewLogger(cfg Config, numShards int) *Logger {
 	}
 	_ = os.MkdirAll(l.cfg.LogDir, 0755)
 	l.openActiveFile()
-	l.wg.Add(3)
+	l.wg.Add(4)
 	go l.StartDrainer()
 	go l.StartPersister()
 	go l.StartDiskMonitor()
+	go l.StartCompressorWorker()
 	return l
+}
+
+func (l *Logger) StartCompressorWorker() {
+	defer l.wg.Done()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-l.closeChan:
+			l.processPendingSegments()
+			return
+		case <-ticker.C:
+			l.processPendingSegments()
+		}
+	}
+}
+
+func (l *Logger) processPendingSegments() {
+	files, err := os.ReadDir(l.cfg.LogDir)
+	if err != nil {
+		return
+	}
+
+	for _, f := range files {
+		if f.IsDir() {
+			continue
+		}
+		name := f.Name()
+		if strings.HasPrefix(name, "segment_") && strings.HasSuffix(name, ".log") {
+			srcPath := filepath.Join(l.cfg.LogDir, name)
+			dstPath := filepath.Join(l.cfg.LogDir, name+".zst.ready")
+
+			_ = l.compressAndEncryptFile(srcPath, dstPath)
+		}
+	}
+}
+
+func (l *Logger) compressAndEncryptFile(srcPath, dstPath string) error {
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	tmpPath := dstPath + ".tmp"
+	dstFile, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = dstFile.Close()
+		_ = os.Remove(tmpPath)
+	}()
+
+	bufSize := l.cfg.FlushBufferSize
+	if bufSize <= 0 {
+		bufSize = 256 * 1024
+	}
+
+	readBuf := make([]byte, bufSize)
+	compressBuf := make([]byte, 0, bufSize)
+	encryptBuf := make([]byte, 4+12+bufSize+16+128)
+
+	enc := zstdEncoderPool.Get().(*zstd.Encoder)
+	defer zstdEncoderPool.Put(enc)
+
+	for {
+		n, err := io.ReadFull(srcFile, readBuf)
+		if n > 0 {
+			data := readBuf[:n]
+			compressBuf = enc.EncodeAll(data, compressBuf[:0])
+
+			totalLen := 4 + 12 + len(compressBuf) + 16
+			if len(encryptBuf) < totalLen {
+				encryptBuf = make([]byte, totalLen+128)
+			}
+
+			l.incrementNonce()
+			binary.BigEndian.PutUint32(encryptBuf[0:4], uint32(12+len(compressBuf)+16))
+			copy(encryptBuf[4:16], l.nonceBuf[:])
+			_ = l.cipherAEAD.Seal(encryptBuf[16:16], l.nonceBuf[:], compressBuf, nil)
+
+			if _, err := dstFile.Write(encryptBuf[:totalLen]); err != nil {
+				return err
+			}
+		}
+
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := dstFile.Sync(); err != nil {
+		return err
+	}
+	if err := dstFile.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		return err
+	}
+
+	_ = srcFile.Close()
+	return os.Remove(srcPath)
 }
 
 func (l *Logger) Close() {

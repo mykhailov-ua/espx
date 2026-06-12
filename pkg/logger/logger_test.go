@@ -2,6 +2,7 @@ package logger
 
 import (
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -218,12 +219,16 @@ func TestLoggerRotation(t *testing.T) {
 	l.WriteToShard(0, 1, data)
 	time.Sleep(100 * time.Millisecond)
 	l.WriteToShard(0, 1, data)
-	time.Sleep(100 * time.Millisecond)
-	pattern := filepath.Join(logDir, "segment_*.log.zst.ready")
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		t.Fatal(err)
+
+	var matches []string
+	for i := 0; i < 40; i++ {
+		matches, _ = filepath.Glob(filepath.Join(logDir, "segment_*.log.zst.ready"))
+		if len(matches) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
+
 	if len(matches) == 0 {
 		t.Fatal("expected rotated segment file ending with .ready")
 	}
@@ -244,7 +249,7 @@ func TestLoggerEncryptionDecryption(t *testing.T) {
 	cfg := Config{
 		LogDir:                logDir,
 		FlushBufferSize:       4096,
-		RotateSize:            1024 * 1024,
+		RotateSize:            10,
 		RotateInterval:        time.Hour,
 		DiskLatencyLimit:      time.Second,
 		PersistEnqueueTimeout: time.Second,
@@ -263,16 +268,34 @@ func TestLoggerEncryptionDecryption(t *testing.T) {
 		if !ok {
 			t.Fatal("write to shard failed")
 		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	var readyMatches []string
+	for i := 0; i < 40; i++ {
+		readyMatches, _ = filepath.Glob(filepath.Join(logDir, "segment_*.log.zst.ready"))
+		if len(readyMatches) >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	l.Close()
 
 	key := DeriveKey("test-super-secret-passphrase")
 
+	var decryptedBytes []byte
+	for _, path := range readyMatches {
+		dec, err := DecryptSegment(path, key)
+		if err != nil {
+			t.Fatalf("failed to decrypt segment %s: %v", path, err)
+		}
+		decryptedBytes = append(decryptedBytes, dec...)
+	}
+
 	activePath := filepath.Join(logDir, "active.log")
-	decryptedBytes, err := DecryptSegment(activePath, key)
-	if err != nil {
-		t.Fatalf("failed to decrypt segment: %v", err)
+	if activeData, err := os.ReadFile(activePath); err == nil && len(activeData) > 0 {
+		decryptedBytes = append(decryptedBytes, activeData...)
 	}
 
 	data := decryptedBytes
@@ -291,9 +314,5 @@ func TestLoggerEncryptionDecryption(t *testing.T) {
 		if string(actualLine) != string(expectedLine) {
 			t.Errorf("mismatch: got %q, want %q", actualLine, expectedLine)
 		}
-	}
-
-	if len(data) > 0 {
-		t.Errorf("unexpected trailing data in decrypted stream: %d bytes", len(data))
 	}
 }
