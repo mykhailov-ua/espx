@@ -1,12 +1,22 @@
 package ads
 
-import ()
-
 import (
+	"hash/crc32"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+func TestCRC32Castagnoli(t *testing.T) {
+	table := crc32.MakeTable(crc32.Castagnoli)
+	ids := []uuid.UUID{uuid.Nil, uuid.New(), uuid.New(), uuid.New()}
+	for _, id := range ids {
+		want := crc32.Checksum(id[:], table)
+		if got := crc32Castagnoli(&id); got != want {
+			t.Fatalf("id=%s: crc32Castagnoli=%08x want %08x", id, got, want)
+		}
+	}
+}
 
 func TestJumpHashSharder_GetShard(t *testing.T) {
 	numShards := 10

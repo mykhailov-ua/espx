@@ -176,7 +176,7 @@ func (hb *HybridBalancer) SelectAndShard(userID string, currentCampaignRps int64
 	var shard int
 
 	if !isHot {
-		shard = int(jumpHash(uint64(crc32IEEE(campaign.ID)), int32(hb.totalShards)))
+		shard = int(jumpHash(uint64(crc32Castagnoli(&campaign.ID)), int32(hb.totalShards)))
 	} else {
 		subShardCount := int(currentCampaignRps/hb.maxRpsPerNode) + 1
 		if subShardCount > hb.totalShards {
@@ -191,7 +191,7 @@ func (hb *HybridBalancer) SelectAndShard(userID string, currentCampaignRps int64
 		userHash := hasher.Sum32()
 		subShardIdx := userHash % uint32(subShardCount)
 
-		combinedHash := uint64(crc32IEEE(campaign.ID)) ^ uint64(subShardIdx)
+		combinedHash := uint64(crc32Castagnoli(&campaign.ID)) ^ uint64(subShardIdx)
 		shard = int(jumpHash(combinedHash, int32(hb.totalShards)))
 	}
 

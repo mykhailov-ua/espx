@@ -1,8 +1,6 @@
 package ads
 
 import (
-	"hash/crc32"
-
 	"github.com/google/uuid"
 )
 
@@ -30,7 +28,7 @@ func NewStaticSlotSharder(numBuckets int) *StaticSlotSharder {
 }
 
 func (s *StaticSlotSharder) GetShard(id uuid.UUID) int {
-	key := crc32IEEE(id)
+	key := crc32Castagnoli(&id)
 	slot := key & 1023
 	return int(s.slots[slot])
 }
@@ -42,22 +40,12 @@ func NewJumpHashSharder(numBuckets int) *JumpHashSharder {
 	return &JumpHashSharder{numBuckets: numBuckets}
 }
 
-var crc32Table = crc32.IEEETable
-
-func crc32IEEE(data uuid.UUID) uint32 {
-	var crc uint32 = 0xffffffff
-	for i := 0; i < 16; i++ {
-		crc = crc32Table[byte(crc)^data[i]] ^ (crc >> 8)
-	}
-	return ^crc
-}
-
 func (s *JumpHashSharder) GetShard(id uuid.UUID) int {
 	if s.numBuckets <= 1 {
 		return 0
 	}
 
-	key := uint64(crc32IEEE(id))
+	key := uint64(crc32Castagnoli(&id))
 
 	return int(jumpHash(key, int32(s.numBuckets)))
 }
