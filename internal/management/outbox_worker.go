@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"espx/internal/ads"
 	"espx/internal/ads/db"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,38 +16,63 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// OutboxWorker propagates Postgres transactional changes to Redis for the hot-path ad stack.
 type OutboxWorker struct {
 	svc *Service
 }
 
+// NewOutboxWorker binds outbox processing to the management service.
 func NewOutboxWorker(svc *Service) *OutboxWorker {
 	return &OutboxWorker{svc: svc}
 }
 
+// CampaignPayload carries campaign identity and budget data in outbox events.
 type CampaignPayload struct {
 	CampaignID  string `json:"campaign_id"`
 	BudgetLimit int64  `json:"budget_limit,omitempty"`
 }
 
+// SettingsPayload carries system settings snapshots in outbox events.
 type SettingsPayload struct {
 	Settings map[string]string `json:"settings"`
 }
 
-func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
+// BlacklistPayload carries IP block or unblock actions in outbox events.
+type BlacklistPayload struct {
+	Action string `json:"action"`
+	IP     string `json:"ip"`
+	Reason string `json:"reason"`
+}
 
+// normalizeBlacklistReason defaults empty blacklist sources to the manual category.
+func normalizeBlacklistReason(reason string) string {
+	if reason == "" {
+		return "manual"
+	}
+	return reason
+}
+
+// Start runs outbox polling, cold sync, and stale lease recovery until the context is cancelled.
+func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 	if err := w.ProcessOutbox(ctx); err != nil {
 		slog.Error("outbox startup cold sync failed", "error", err)
 	}
 
-	go func() {
-		slog.Info("outbox worker starting polling loop", "interval", interval)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+	slog.Info("outbox worker starting polling loop", "interval", interval)
 
+	pollTimer := time.NewTimer(interval)
+	defer pollTimer.Stop()
+
+	recoveryTicker := time.NewTicker(interval * 5)
+	defer recoveryTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-recoveryTicker.C:
+			w.reclaimStaleProcessing(ctx)
+		case <-pollTimer.C:
 			processed, err := w.ProcessOutboxWithCount(ctx, 1000)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -56,59 +82,50 @@ func (w *OutboxWorker) Start(ctx context.Context, interval time.Duration) {
 					return
 				}
 				slog.Error("outbox polling loop iteration failed, retrying in 2s", "error", err)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(2 * time.Second):
-				}
+				pollTimer.Reset(2 * time.Second)
 				continue
 			}
 
 			if processed > 0 {
+				pollTimer.Reset(0)
 				continue
 			}
 
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(interval):
-			}
-		}
-	}()
-
-	ticker := time.NewTicker(interval * 5)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-
-			_, _ = w.svc.pool.Exec(ctx, "UPDATE outbox_events SET status = 'PENDING' WHERE status = 'PROCESSING' AND created_at < NOW() - INTERVAL '1 minute'")
-
-			if err := w.ProcessOutbox(ctx); err != nil {
-				if strings.Contains(err.Error(), "closed pool") {
-					return
-				}
-				slog.Error("failed to run safety outbox fallback drain", "error", err)
-			}
+			pollTimer.Reset(interval)
 		}
 	}
 }
 
+// reclaimStaleProcessing resets outbox rows stuck in PROCESSING after worker crashes.
+func (w *OutboxWorker) reclaimStaleProcessing(ctx context.Context) {
+	_, err := w.svc.pool.Exec(ctx, `
+		UPDATE outbox_events
+		SET status = 'PENDING', processing_started_at = NULL
+		WHERE status = 'PROCESSING'
+		  AND processing_started_at IS NOT NULL
+		  AND processing_started_at < NOW() - INTERVAL '1 minute'`)
+	if err != nil && ctx.Err() == nil && !strings.Contains(err.Error(), "closed pool") {
+		slog.Error("failed to reclaim stale outbox events", "error", err)
+	}
+}
+
+// ProcessOutbox drains pending outbox events up to the default batch size.
 func (w *OutboxWorker) ProcessOutbox(ctx context.Context) error {
 	_, err := w.ProcessOutboxWithCount(ctx, 1000)
 	return err
 }
 
+// ProcessOutboxWithCount claims, applies, and marks a batch of outbox events, returning the success count.
 func (w *OutboxWorker) ProcessOutboxWithCount(ctx context.Context, limit int32) (int, error) {
+	opCtx, cancel := workerContext(ctx, workerOutboxTimeout)
+	defer cancel()
+
 	var events []db.OutboxEvent
 
-	err := pgx.BeginFunc(ctx, w.svc.pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(opCtx, w.svc.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		var err error
-		events, err = q.GetPendingOutboxEventsForUpdate(ctx, limit)
+		events, err = q.GetPendingOutboxEventsForUpdate(opCtx, limit)
 		if err != nil || len(events) == 0 {
 			return err
 		}
@@ -118,7 +135,10 @@ func (w *OutboxWorker) ProcessOutboxWithCount(ctx context.Context, limit int32) 
 			ids[i] = ev.ID
 		}
 
-		_, err = tx.Exec(ctx, "UPDATE outbox_events SET status = 'PROCESSING' WHERE id = ANY($1)", ids)
+		_, err = tx.Exec(opCtx, `
+			UPDATE outbox_events
+			SET status = 'PROCESSING', processing_started_at = NOW()
+			WHERE id = ANY($1)`, ids)
 		if err != nil {
 			return err
 		}
@@ -133,140 +153,26 @@ func (w *OutboxWorker) ProcessOutboxWithCount(ctx context.Context, limit int32) 
 	revertIDs := make([]int64, 0, len(events))
 
 	for _, ev := range events {
-		var rdbErr error
-		switch ev.EventType {
-		case "CREATE_CAMPAIGN":
-			var p CampaignPayload
-			if err := json.Unmarshal(ev.Payload, &p); err == nil {
-				campUUID, _ := uuid.Parse(p.CampaignID)
-				rdb := w.svc.getRDB(campUUID)
-				if rdb != nil {
-					_, rdbErr = rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-						pipe.Set(ctx, fmt.Sprintf("budget:campaign:%s", p.CampaignID), p.BudgetLimit, 24*time.Hour)
-						channel := w.svc.cfg.CampaignUpdateChannel
-						if channel == "" {
-							channel = "campaigns:update"
-						}
-						pipe.Publish(ctx, channel, p.CampaignID)
-						return nil
-					})
-				}
-			}
-		case "CANCEL_CAMPAIGN":
-			var p CampaignPayload
-			if err := json.Unmarshal(ev.Payload, &p); err == nil {
-				campUUID, _ := uuid.Parse(p.CampaignID)
-				rdb := w.svc.getRDB(campUUID)
-				if rdb != nil {
-					_, rdbErr = rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-						pipe.Del(ctx, fmt.Sprintf("budget:campaign:%s", p.CampaignID))
-						channel := w.svc.cfg.CampaignUpdateChannel
-						if channel == "" {
-							channel = "campaigns:update"
-						}
-						pipe.Publish(ctx, channel, p.CampaignID)
-						return nil
-					})
-				}
-			}
-		case "UPDATE_CAMPAIGN_PACING":
-			var p struct {
-				CampaignID string `json:"campaign_id"`
-				PacingMode string `json:"pacing_mode"`
-			}
-			if err := json.Unmarshal(ev.Payload, &p); err == nil {
-				campUUID, _ := uuid.Parse(p.CampaignID)
-				rdb := w.svc.getRDB(campUUID)
-				if rdb != nil {
-					_, rdbErr = rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-						pipe.HSet(ctx, fmt.Sprintf("campaign:settings:%s", p.CampaignID), "pacing_mode", p.PacingMode)
-						channel := w.svc.cfg.CampaignUpdateChannel
-						if channel == "" {
-							channel = "campaigns:update"
-						}
-						pipe.Publish(ctx, channel, p.CampaignID)
-						return nil
-					})
-				}
-			}
-		case "UPDATE_SETTINGS":
-			var p SettingsPayload
-			if err := json.Unmarshal(ev.Payload, &p); err == nil {
-				if len(w.svc.rdbs) > 0 && w.svc.rdbs[0] != nil {
-					rdb := w.svc.rdbs[0]
-					_, rdbErr = rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-						if len(p.Settings) > 0 {
-							pipe.HSet(ctx, "config:values", p.Settings)
-						}
-						pipe.Incr(ctx, "config:version")
-						return nil
-					})
-				}
-			}
-		case "CONFIGURE_BRAND_FCAP":
-
-			var p struct {
-				BrandID    string `json:"brand_id"`
-				FreqLimit  int32  `json:"freq_limit"`
-				FreqWindow int32  `json:"freq_window"`
-			}
-			if err := json.Unmarshal(ev.Payload, &p); err == nil {
-				brandUUID, parseErr := uuid.Parse(p.BrandID)
-				if parseErr == nil {
-					rows, dbErr := w.svc.pool.Query(ctx, "SELECT id FROM campaigns WHERE brand_id = $1 AND status = 'ACTIVE'", ToUUID(brandUUID))
-					if dbErr == nil {
-						var campIDs []string
-						for rows.Next() {
-							var cid uuid.UUID
-							if scanErr := rows.Scan(&cid); scanErr == nil {
-								campIDs = append(campIDs, cid.String())
-							}
-						}
-						rows.Close()
-
-						if len(campIDs) > 0 {
-							channel := w.svc.cfg.CampaignUpdateChannel
-							if channel == "" {
-								channel = "campaigns:update"
-							}
-							if len(w.svc.rdbs) > 0 && w.svc.rdbs[0] != nil {
-								rdb := w.svc.rdbs[0]
-								_, rdbErr = rdb.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-									for _, cidStr := range campIDs {
-										pipe.Publish(ctx, channel, cidStr)
-									}
-									return nil
-								})
-							}
-						}
-					} else {
-						rdbErr = dbErr
-					}
-				} else {
-					rdbErr = parseErr
-				}
-			} else {
-				rdbErr = err
-			}
-		}
-
-		if rdbErr == nil {
-			processedIDs = append(processedIDs, ev.ID)
-		} else {
-			slog.Warn("redis outbox processing failed for event, marking for revert", "id", ev.ID, "error", rdbErr)
+		if err := w.handleOutboxEvent(opCtx, ctx, ev); err != nil {
+			slog.Warn("redis outbox processing failed for event, marking for revert", "id", ev.ID, "error", err)
 			revertIDs = append(revertIDs, ev.ID)
+			continue
 		}
+		processedIDs = append(processedIDs, ev.ID)
 	}
 
 	if len(processedIDs) > 0 {
-		_, err = w.svc.pool.Exec(ctx, "UPDATE outbox_events SET status = 'PROCESSED' WHERE id = ANY($1)", processedIDs)
+		_, err = w.svc.pool.Exec(opCtx, "UPDATE outbox_events SET status = 'PROCESSED' WHERE id = ANY($1)", processedIDs)
 		if err != nil {
 			slog.Error("failed to mark outbox events as processed", "error", err)
 		}
 	}
 
 	if len(revertIDs) > 0 {
-		_, err = w.svc.pool.Exec(ctx, "UPDATE outbox_events SET status = 'PENDING' WHERE id = ANY($1)", revertIDs)
+		_, err = w.svc.pool.Exec(opCtx, `
+			UPDATE outbox_events
+			SET status = 'PENDING', processing_started_at = NULL
+			WHERE id = ANY($1)`, revertIDs)
 		if err != nil {
 			slog.Error("failed to revert failed outbox events", "error", err)
 		}
@@ -275,6 +181,103 @@ func (w *OutboxWorker) ProcessOutboxWithCount(ctx context.Context, limit int32) 
 	return len(processedIDs), nil
 }
 
+// campaignRemainingBudget reads authoritative remaining budget from Postgres for Redis seeding.
+func (w *OutboxWorker) campaignRemainingBudget(ctx context.Context, campaignID uuid.UUID) (int64, error) {
+	var limit, spend int64
+	err := w.svc.pool.QueryRow(ctx, `
+		SELECT budget_limit, current_spend
+		FROM campaigns
+		WHERE id = $1`, ads.ToUUID(campaignID)).Scan(&limit, &spend)
+	if err != nil {
+		return 0, err
+	}
+	remaining := limit - spend
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, nil
+}
+
+// setCampaignBudgetRemaining writes the remaining budget key used by the hot-path auction filter.
+func (w *OutboxWorker) setCampaignBudgetRemaining(ctx context.Context, pipe redis.Pipeliner, campaignIDStr string, campaignID uuid.UUID, payloadLimit int64) error {
+	remaining, err := w.campaignRemainingBudget(ctx, campaignID)
+	if err != nil {
+		if payloadLimit <= 0 {
+			return err
+		}
+		remaining = payloadLimit
+	}
+	if remaining <= 0 {
+		return nil
+	}
+	pipe.Set(ctx, fmt.Sprintf("budget:campaign:%s", campaignIDStr), remaining, 0)
+	return nil
+}
+
+// ToUUID converts a google/uuid value into the pgtype representation used by raw SQL helpers.
 func ToUUID(u uuid.UUID) pgtype.UUID {
 	return pgtype.UUID{Bytes: u, Valid: true}
+}
+
+// applyBlacklistPayload mirrors a blacklist change to every Redis shard.
+func (w *OutboxWorker) applyBlacklistPayload(ctx context.Context, p BlacklistPayload) error {
+	if len(w.svc.rdbs) == 0 {
+		return fmt.Errorf("no redis client available")
+	}
+	reason := normalizeBlacklistReason(p.Reason)
+	key := "blacklist:" + reason
+	for _, rdb := range w.svc.rdbs {
+		var err error
+		switch p.Action {
+		case "add":
+			err = rdb.SAdd(ctx, key, p.IP).Err()
+		case "remove":
+			err = rdb.SRem(ctx, key, p.IP).Err()
+		default:
+			err = fmt.Errorf("unknown blacklist action: %s", p.Action)
+		}
+		if err != nil {
+			return fmt.Errorf("blacklist sync failed on shard: %w", err)
+		}
+	}
+	return nil
+}
+
+// syncBrandCreativesToRedis publishes weighted creative lists for hot-path rotation.
+func (w *OutboxWorker) syncBrandCreativesToRedis(ctx context.Context, brandIDStr string) error {
+	brandID, err := uuid.Parse(brandIDStr)
+	if err != nil {
+		return err
+	}
+	rows, err := db.New(w.svc.pool).ListActiveBrandCreatives(ctx, ToUUID(brandID))
+	if err != nil {
+		return err
+	}
+	type creativeEntry struct {
+		ID     string `json:"id"`
+		URL    string `json:"url"`
+		Weight int32  `json:"weight"`
+	}
+	entries := make([]creativeEntry, len(rows))
+	for i, r := range rows {
+		entries[i] = creativeEntry{
+			ID:     uuid.UUID(r.ID.Bytes).String(),
+			URL:    r.LandingUrl,
+			Weight: r.Weight,
+		}
+	}
+	payload, err := json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	if len(w.svc.rdbs) == 0 {
+		return fmt.Errorf("no redis client")
+	}
+	key := "brand:creatives:" + brandIDStr
+	for _, rdb := range w.svc.rdbs {
+		if err := rdb.Set(ctx, key, payload, 0).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestOutboxPerformanceMetrics guards outbox polling serializes concurrent FOR UPDATE claimers.
 func TestOutboxPerformanceMetrics(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping outbox performance metrics in short mode")
@@ -109,6 +110,7 @@ func TestOutboxPerformanceMetrics(t *testing.T) {
 	require.True(t, tx2End.Sub(tx2Start) >= 30*time.Millisecond, "Worker 2 should have been blocked waiting for Worker 1's lock release")
 }
 
+// seedEvents exists so outbox locking tests start from a known bulk pending backlog.
 func seedEvents(t *testing.T, pool *pgxpool.Pool, count int) {
 	ctx := context.Background()
 	payloads := make([][]byte, count)
@@ -129,6 +131,7 @@ func seedEvents(t *testing.T, pool *pgxpool.Pool, count int) {
 	require.NoError(t, err)
 }
 
+// TestOutboxExplainAnalyze captures query plan for pending outbox claim to catch index regressions.
 func TestOutboxExplainAnalyze(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping outbox EXPLAIN ANALYZE in short mode")
@@ -158,6 +161,7 @@ FOR UPDATE SKIP LOCKED;`)
 	}
 }
 
+// BenchmarkProcessOutbox measures outbox batch processing throughput.
 func BenchmarkProcessOutbox(b *testing.B) {
 	pool, cleanupDB := database.SetupTestDB(b)
 	defer cleanupDB()
@@ -186,6 +190,7 @@ func BenchmarkProcessOutbox(b *testing.B) {
 	}
 }
 
+// seedEventsForBench exists so outbox benchmarks avoid per-iteration row setup overhead.
 func seedEventsForBench(pool *pgxpool.Pool, count int) {
 	ctx := context.Background()
 	const batchSize = 10000
