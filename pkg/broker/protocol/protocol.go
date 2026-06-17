@@ -1,3 +1,4 @@
+// Package protocol defines the internal broker wire format shared by client and server.
 package protocol
 
 import (
@@ -26,6 +27,7 @@ type TopicMetadata struct {
 	Name string
 }
 
+// TopicRegistry assigns compact numeric IDs so batch produce frames stay small on the wire.
 type TopicRegistry struct {
 	mu     sync.Mutex
 	topics [65536]unsafe.Pointer
@@ -78,6 +80,7 @@ type BatchMsgHeader struct {
 	PayloadLen uint32
 }
 
+// BatchIterator walks batch payloads without per-message heap allocations.
 type BatchIterator struct {
 	ptr     unsafe.Pointer
 	end     unsafe.Pointer
@@ -125,6 +128,7 @@ func (it *BatchIterator) Next() bool {
 	return true
 }
 
+// ReadFrame validates length, CRC, and command before handlers touch payload bytes.
 func ReadFrame(r io.Reader, buf []byte, lenBuf []byte) (uint16, uint64, []byte, error) {
 	if _, err := io.ReadFull(r, lenBuf[:4]); err != nil {
 		return 0, 0, nil, err
@@ -236,7 +240,7 @@ func EncodeFetchRequest(buf []byte, seq uint64, topic string, startOffset uint64
 }
 
 func EncodeProduceResponse(buf []byte, seq uint64, status byte, offset uint64) []byte {
-	binary.BigEndian.PutUint32(buf[0:4], 23) // 19 + 4
+	binary.BigEndian.PutUint32(buf[0:4], 23)
 	binary.BigEndian.PutUint16(buf[4:6], CmdProduceResp)
 	binary.BigEndian.PutUint64(buf[6:14], seq)
 	buf[14] = status
@@ -259,7 +263,7 @@ func EncodeFetchResponseHeader(headerBuf []byte, seq uint64, status byte, msgCou
 }
 
 func EncodeProduceBatchResponse(buf []byte, seq uint64, status byte, offset uint64) []byte {
-	binary.BigEndian.PutUint32(buf[0:4], 23) // 19 + 4
+	binary.BigEndian.PutUint32(buf[0:4], 23)
 	binary.BigEndian.PutUint16(buf[4:6], CmdProduceBatchResp)
 	binary.BigEndian.PutUint64(buf[6:14], seq)
 	buf[14] = status
@@ -312,7 +316,7 @@ func DecodeRegisterTopicRequest(payload []byte) (string, error) {
 }
 
 func EncodeRegisterTopicResponse(buf []byte, seq uint64, status byte, topicID uint16) []byte {
-	binary.BigEndian.PutUint32(buf[0:4], 17) // 13 + 4
+	binary.BigEndian.PutUint32(buf[0:4], 17)
 	binary.BigEndian.PutUint16(buf[4:6], CmdRegisterTopicResp)
 	binary.BigEndian.PutUint64(buf[6:14], seq)
 	buf[14] = status

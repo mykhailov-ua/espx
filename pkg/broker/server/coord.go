@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// Coordinator elects per-topic leaders in Redis and tails the leader log on followers.
 type Coordinator struct {
 	nodeID    string
 	tcpAddr   string
@@ -21,7 +22,7 @@ type Coordinator struct {
 	closeChan chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
-	leaders   atomic.Pointer[map[string]bool] // lock-free reads on hot path
+	leaders   atomic.Pointer[map[string]bool]
 }
 
 func NewCoordinator(nodeID string, tcpAddr string, redisURL string, server *Server) (*Coordinator, error) {

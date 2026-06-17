@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"espx/pkg/broker/client"
+
 	rediscontainer "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
+// TestHAClusterFailoverAndReplication validates leader election, replication, and failover produce.
 func TestHAClusterFailoverAndReplication(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

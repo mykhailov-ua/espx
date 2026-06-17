@@ -1,3 +1,4 @@
+// Package client is a TCP broker client with leader redirect via Redis coordination.
 package client
 
 import (
@@ -110,6 +111,7 @@ func (c *Client) getConn() (net.Conn, error) {
 	return c.conn, nil
 }
 
+// Produce retries across leader failover; callers must not pin to a stale broker address.
 func (c *Client) Produce(topic string, payload []byte) (uint64, error) {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
@@ -204,6 +206,7 @@ func (c *Client) Produce(topic string, payload []byte) (uint64, error) {
 	return 0, fmt.Errorf("failed after 5 attempts, last error: %w", lastErr)
 }
 
+// Fetch follows the same redirect policy as Produce for HA follower reads.
 func (c *Client) Fetch(topic string, startOffset uint64, maxBytes uint32) (MessageIterator, error) {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {

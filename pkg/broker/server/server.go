@@ -1,3 +1,4 @@
+// Package server is the gnet-based broker TCP front-end with optional HA coordination.
 package server
 
 import (
@@ -37,7 +38,7 @@ type Server struct {
 	maxSegSize    int64
 	indexInterval int64
 	topics        sync.Map
-	initMu        sync.Mutex // serializes partition initialization on cold path
+	initMu        sync.Mutex
 	closeChan     chan struct{}
 	closeOnce     sync.Once
 	wg            sync.WaitGroup

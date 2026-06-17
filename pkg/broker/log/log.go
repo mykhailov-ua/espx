@@ -1,3 +1,4 @@
+// Package log implements mmap-backed append-only segments for broker partition storage.
 package log
 
 import (
@@ -20,6 +21,7 @@ import (
 
 var ErrSegmentNotFound = errors.New("segment not found")
 
+// FetchBufPool reuses 1 MiB fetch buffers to keep broker read paths allocation-free.
 var FetchBufPool = sync.Pool{
 	New: func() interface{} {
 		b := make([]byte, 1024*1024)
@@ -256,7 +258,6 @@ func (s *Segment) Write(offset uint64, payload []byte) (int64, error) {
 		copy(payloadDst, payload)
 	}
 
-	// Release semantics: ensure the mmap payload is visible before logSize increments.
 	atomic.StoreInt64(&s.logSize, pos+int64(totalLen))
 	return pos, nil
 }
@@ -275,7 +276,6 @@ func (s *Segment) WriteIndexEntry(offset uint64, position int64) error {
 	posPtr := unsafe.Pointer(uintptr(entryPtr) + 8)
 	*(*uint64)(posPtr) = bits.ReverseBytes64(uint64(position))
 
-	// Release semantics: ensure index bytes are visible before size updates.
 	atomic.StoreInt64(&s.indexSize, idxSize+16)
 	return nil
 }
@@ -459,17 +459,15 @@ func (s *Segment) Sync() error {
 	return nil
 }
 
-// segmentSnapshot is an immutable snapshot of partition state for lock-free reads.
-// Stored via atomic.Pointer and swapped atomically on mutation (RCU pattern).
 type segmentSnapshot struct {
 	segments  []*Segment
 	activeSeg *Segment
 }
 
 type PartitionLog struct {
-	writeMu       sync.Mutex // protects Append/roll (writers only)
+	writeMu       sync.Mutex
 	dir           string
-	snap          atomic.Pointer[segmentSnapshot] // lock-free reads via RCU
+	snap          atomic.Pointer[segmentSnapshot]
 	nextOffset    uint64
 	bytesSinceIdx int64
 	indexInterval int64
@@ -619,9 +617,6 @@ func (p *PartitionLog) Append(payload []byte) (uint64, error) {
 	return offset, nil
 }
 
-// rollLocked publishes a snapshot with a read-only clone of the active segment,
-// opens a new writable segment, and closes the old mmap after 100ms so concurrent
-// readers can finish copying. Requires p.writeMu held.
 func (p *PartitionLog) rollLocked(old *segmentSnapshot) error {
 	activeSeg := old.activeSeg
 
@@ -701,8 +696,7 @@ func (p *PartitionLog) Close() error {
 	return nil
 }
 
-// ReadRawMessages loads the current snapshot atomically (no RWMutex).
-// Page faults on mmap cannot block writers because no shared lock is held.
+// ReadRawMessages snapshots segments without RWMutex so mmap page faults cannot stall appends.
 func (p *PartitionLog) ReadRawMessages(startOffset uint64, maxBytes uint32) ([]byte, *[]byte, error) {
 	s := p.snap.Load()
 	if s == nil || len(s.segments) == 0 {

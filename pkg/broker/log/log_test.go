@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestSegmentWriteAndRead smoke-tests mmap append and offset lookup.
 func TestSegmentWriteAndRead(t *testing.T) {
 	dir, err := os.MkdirTemp("", "segment-test")
 	if err != nil {
@@ -47,6 +48,7 @@ func TestSegmentWriteAndRead(t *testing.T) {
 	}
 }
 
+// BenchmarkSegmentWrite tracks append throughput regression on partition logs.
 func BenchmarkSegmentWrite(b *testing.B) {
 	dir, err := os.MkdirTemp("", "segment-bench")
 	if err != nil {
@@ -77,6 +79,7 @@ func BenchmarkSegmentWrite(b *testing.B) {
 	}
 }
 
+// TestSegmentRecoveryWithMalformedTail ensures recovery truncates torn tail records safely.
 func TestSegmentRecoveryWithMalformedTail(t *testing.T) {
 	dir, err := os.MkdirTemp("", "segment-recovery-test")
 	if err != nil {

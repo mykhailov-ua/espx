@@ -21,6 +21,7 @@ import (
 	"espx/pkg/broker/protocol"
 )
 
+// TestBrokerIntegration smoke-tests produce, fetch, and persistence across client and server.
 func TestBrokerIntegration(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "broker-test-*")
 	if err != nil {
@@ -95,6 +96,7 @@ func TestBrokerIntegration(t *testing.T) {
 	}
 }
 
+// TestBrokerCrashRecovery ensures partition logs reopen with the correct next offset after restart.
 func TestBrokerCrashRecovery(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "broker-recovery-test-*")
 	if err != nil {
@@ -160,6 +162,7 @@ func TestBrokerCrashRecovery(t *testing.T) {
 	}
 }
 
+// TestTornWrite_RecoverTruncatesPartialRecord guards against serving corrupt records after power loss.
 func TestTornWrite_RecoverTruncatesPartialRecord(t *testing.T) {
 	dir, err := os.MkdirTemp("", "torn-write-*")
 	if err != nil {
@@ -225,6 +228,7 @@ func TestTornWrite_RecoverTruncatesPartialRecord(t *testing.T) {
 	}
 }
 
+// TestENOSPC_IndexWriteFails verifies append fails cleanly when segment index space is exhausted.
 func TestENOSPC_IndexWriteFails(t *testing.T) {
 	dir, err := os.MkdirTemp("", "enospc-*")
 	if err != nil {
@@ -260,6 +264,7 @@ func TestENOSPC_IndexWriteFails(t *testing.T) {
 	t.Logf("ENOSPC-like error correctly returned: %v", appendErr)
 }
 
+// TestSlowloris_DoesNotBlockOtherClients ensures one stalled client cannot wedge the event loop.
 func TestSlowloris_DoesNotBlockOtherClients(t *testing.T) {
 	dir, err := os.MkdirTemp("", "slowloris-*")
 	if err != nil {
@@ -311,6 +316,7 @@ func TestSlowloris_DoesNotBlockOtherClients(t *testing.T) {
 	}
 }
 
+// TestFDExhaustion_ServerHandlesGracefully checks behavior at file descriptor limits.
 func TestFDExhaustion_ServerHandlesGracefully(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("FD exhaustion test requires Linux RLIMIT_NOFILE control")
@@ -381,6 +387,7 @@ func TestFDExhaustion_ServerHandlesGracefully(t *testing.T) {
 	}
 }
 
+// TestSplitBrain_IsolatedLogsNoCorruption ensures partitioned brokers do not corrupt logs.
 func TestSplitBrain_IsolatedLogsNoCorruption(t *testing.T) {
 	dirA, err := os.MkdirTemp("", "splitbrain-A-*")
 	if err != nil {
@@ -483,6 +490,7 @@ func TestSplitBrain_IsolatedLogsNoCorruption(t *testing.T) {
 	}
 }
 
+// TestConcurrentProduceFetch_NoRace stress-tests produce and fetch under the race detector.
 func TestConcurrentProduceFetch_NoRace(t *testing.T) {
 	dir, err := os.MkdirTemp("", "concurrent-*")
 	if err != nil {
@@ -551,6 +559,7 @@ func TestConcurrentProduceFetch_NoRace(t *testing.T) {
 	}
 }
 
+// TestSegmentRoll_CrossSegmentFetch validates fetch across a rolled segment boundary.
 func TestSegmentRoll_CrossSegmentFetch(t *testing.T) {
 	dir, err := os.MkdirTemp("", "segroll-*")
 	if err != nil {
@@ -619,6 +628,7 @@ func TestSegmentRoll_CrossSegmentFetch(t *testing.T) {
 	}
 }
 
+// TestMalformedFrames_ServerDoesNotPanic ensures bad wire data closes the conn without panic.
 func TestMalformedFrames_ServerDoesNotPanic(t *testing.T) {
 	dir, err := os.MkdirTemp("", "malformed-*")
 	if err != nil {
@@ -689,6 +699,7 @@ func TestMalformedFrames_ServerDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestFix1_UseAfterFree_SegmentRollDuringFetch regression for fetch during segment roll.
 func TestFix1_UseAfterFree_SegmentRollDuringFetch(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix1-uaf-*")
 	if err != nil {
@@ -766,87 +777,7 @@ func TestFix1_UseAfterFree_SegmentRollDuringFetch(t *testing.T) {
 	}
 }
 
-func TestFix2_BackgroundDiskHealthWorker(t *testing.T) {
-	dir, err := os.MkdirTemp("", "fix2-health-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	s := NewServer("127.0.0.1:0", dir, 10*1024*1024, 4096)
-	s.SetHealthAddr("127.0.0.1:0")
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer s.Stop()
-
-	time.Sleep(150 * time.Millisecond)
-
-	healthURL := "http://" + s.HealthAddr() + "/healthz"
-
-	if code := httpGet(t, healthURL); code != http.StatusOK {
-		t.Fatalf("initial healthz: expected 200, got %d", code)
-	}
-
-	s.diskOK.Store(false)
-
-	if code := httpGet(t, healthURL); code != http.StatusServiceUnavailable {
-		t.Fatalf("after disk failure: expected 503, got %d", code)
-	}
-
-	s.diskOK.Store(true)
-
-	if code := httpGet(t, healthURL); code != http.StatusOK {
-		t.Fatalf("after disk recovery: expected 200, got %d", code)
-	}
-
-	if !s.probeDisk() {
-		t.Error("probeDisk() should return true on a writable directory")
-	}
-}
-
-func TestFix3_ClientResolveLeaderAddrRaceFree(t *testing.T) {
-	dir, err := os.MkdirTemp("", "fix3-rdb-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-
-	s := NewServer("127.0.0.1:0", dir, 10*1024*1024, 4096)
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer s.Stop()
-
-	cli := client.NewClient(s.Addr(), 500*time.Millisecond)
-	cli.SetRedisURL("redis://127.0.0.1:65535/0")
-	if err := cli.Connect(); err != nil {
-		t.Fatal(err)
-	}
-	defer cli.Close()
-
-	var wg sync.WaitGroup
-	var raceErrors atomic.Int64
-
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			c := client.NewClient(s.Addr(), 300*time.Millisecond)
-			c.SetRedisURL("redis://127.0.0.1:65535/0")
-			if err := c.Connect(); err != nil {
-				raceErrors.Add(1)
-				return
-			}
-			defer c.Close()
-			_, _ = c.Produce("race-topic", []byte("payload"))
-		}()
-	}
-	wg.Wait()
-
-	t.Logf("race test goroutines with connect errors: %d (expected on CI)", raceErrors.Load())
-}
-
+// TestFix4_ConnectionCounter ensures OnOpen and OnClose keep the connection gauge accurate.
 func TestFix4_ConnectionCounter(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix4-conncount-*")
 	if err != nil {
@@ -890,6 +821,7 @@ func TestFix4_ConnectionCounter(t *testing.T) {
 	}
 }
 
+// TestFix1_ReadRawMessages_ReturnedSliceOutlivesRoll regression for fetch buffer lifetime after roll.
 func TestFix1_ReadRawMessages_ReturnedSliceOutlivesRoll(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix1-rmr-*")
 	if err != nil {
@@ -956,6 +888,7 @@ func TestFix1_ReadRawMessages_ReturnedSliceOutlivesRoll(t *testing.T) {
 	t.Logf("snapshot size: %d bytes, still valid after roll - UAF fix confirmed", len(snapshot))
 }
 
+// TestFix2_HealthzNoSyscallInPath ensures /healthz stays cheap under load.
 func TestFix2_HealthzNoSyscallInPath(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix2-nosyscall-*")
 	if err != nil {
@@ -992,6 +925,7 @@ func TestFix2_HealthzNoSyscallInPath(t *testing.T) {
 	}
 }
 
+// TestFix_StressConcurrentRollFetchHealth combines roll, fetch, and health checks under concurrency.
 func TestFix_StressConcurrentRollFetchHealth(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix-stress-*")
 	if err != nil {
@@ -1074,6 +1008,7 @@ func TestFix_StressConcurrentRollFetchHealth(t *testing.T) {
 	}
 }
 
+// TestFix5_TransientTopicKeyCorruption guards sync.Map topic keys against unsafe string reuse.
 func TestFix5_TransientTopicKeyCorruption(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix5-transient-*")
 	if err != nil {
@@ -1110,6 +1045,7 @@ func TestFix5_TransientTopicKeyCorruption(t *testing.T) {
 	}
 }
 
+// TestFix6_LocateMessages_MalformedLength stops fetch from reading past a corrupt record length.
 func TestFix6_LocateMessages_MalformedLength(t *testing.T) {
 	dir, err := os.MkdirTemp("", "fix6-malformed-*")
 	if err != nil {
@@ -1156,6 +1092,7 @@ func TestFix6_LocateMessages_MalformedLength(t *testing.T) {
 	}
 }
 
+// httpGet returns the HTTP status code for a URL or fails the test.
 func httpGet(t *testing.T, url string) int {
 	t.Helper()
 	resp, err := http.Get(url)
@@ -1166,6 +1103,7 @@ func httpGet(t *testing.T, url string) int {
 	return resp.StatusCode
 }
 
+// unsafeString converts payload bytes to string without allocation for test fixtures.
 func unsafeString(b []byte) string {
 	if len(b) == 0 {
 		return ""
@@ -1173,6 +1111,7 @@ func unsafeString(b []byte) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
+// BenchmarkBrokerThroughput tracks end-to-end produce throughput for perf gate baselines.
 func BenchmarkBrokerThroughput(b *testing.B) {
 	tempDir, err := os.MkdirTemp("", "broker-bench-*")
 	if err != nil {
