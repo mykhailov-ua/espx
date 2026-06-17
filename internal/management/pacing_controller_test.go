@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestClosedLoopPacingController guards pacing controller switches EVEN and ASAP from spend versus daily budget.
 func TestClosedLoopPacingController(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -40,7 +41,10 @@ func TestClosedLoopPacingController(t *testing.T) {
 	err := svc.CreateCustomer(ctx, customerID, "Pacing Customer", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
-	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Test", 100_000_000, db.PacingModeTypeEVEN, 100_000_000, "UTC", 0, 0, nil, "pacing-idem")
+	campaignID, err := svc.CreateCampaign(ctx, CampaignCreateSpec{
+		CustomerID: customerID, Name: "Pacing Test", BudgetLimit: 100_000_000,
+		PacingMode: db.PacingModeTypeEVEN, DailyBudget: 100_000_000, Timezone: "UTC", FreqWindow: 86400, IdempotencyKey: "pacing-idem",
+	})
 	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx, "DELETE FROM outbox_events")
@@ -84,6 +88,7 @@ func TestClosedLoopPacingController(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+// TestClosedLoopPacingController_EdgeCases guards pacing controller handles invalid timezone and zero budget safely.
 func TestClosedLoopPacingController_EdgeCases(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -109,10 +114,16 @@ func TestClosedLoopPacingController_EdgeCases(t *testing.T) {
 	err := svc.CreateCustomer(ctx, customerID, "Pacing Customer Edge", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
-	campaignID1, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Timezone Edge", 100_000_000, db.PacingModeTypeEVEN, 100_000_000, "Invalid/Zone", 0, 0, nil, "pacing-idem-1")
+	campaignID1, err := svc.CreateCampaign(ctx, CampaignCreateSpec{
+		CustomerID: customerID, Name: "Pacing Timezone Edge", BudgetLimit: 100_000_000,
+		PacingMode: db.PacingModeTypeEVEN, DailyBudget: 100_000_000, Timezone: "Invalid/Zone", FreqWindow: 86400, IdempotencyKey: "pacing-idem-1",
+	})
 	require.NoError(t, err)
 
-	campaignID2, err := svc.CreateCampaign(ctx, customerID, nil, "Pacing Zero Budget Edge", 0, db.PacingModeTypeEVEN, 0, "UTC", 0, 0, nil, "pacing-idem-2")
+	campaignID2, err := svc.CreateCampaign(ctx, CampaignCreateSpec{
+		CustomerID: customerID, Name: "Pacing Zero Budget Edge", BudgetLimit: 0,
+		PacingMode: db.PacingModeTypeEVEN, DailyBudget: 0, Timezone: "UTC", FreqWindow: 86400, IdempotencyKey: "pacing-idem-2",
+	})
 	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx, "DELETE FROM outbox_events")
@@ -140,6 +151,7 @@ func TestClosedLoopPacingController_EdgeCases(t *testing.T) {
 	assert.Equal(t, db.PacingModeTypeEVEN, pacing2)
 }
 
+// BenchmarkClosedLoopPacingController measures closed-loop pacing tick cost across multiple campaigns.
 func BenchmarkClosedLoopPacingController(b *testing.B) {
 	if testing.Short() {
 		b.Skip("skipping integration benchmark")
@@ -168,7 +180,10 @@ func BenchmarkClosedLoopPacingController(b *testing.B) {
 	}
 
 	for i := 0; i < 10; i++ {
-		_, err := svc.CreateCampaign(ctx, customerID, nil, uuid.New().String(), 100_000_000, db.PacingModeTypeEVEN, 100_000_000, "UTC", 0, 0, nil, uuid.New().String())
+		_, err := svc.CreateCampaign(ctx, CampaignCreateSpec{
+			CustomerID: customerID, Name: uuid.New().String(), BudgetLimit: 100_000_000,
+			PacingMode: db.PacingModeTypeEVEN, DailyBudget: 100_000_000, Timezone: "UTC", FreqWindow: 86400, IdempotencyKey: uuid.New().String(),
+		})
 		if err != nil {
 			b.Fatal(err)
 		}

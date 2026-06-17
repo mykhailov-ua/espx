@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"espx/internal/ads"
-	"espx/internal/ads/db"
 	"espx/internal/config"
 	"espx/internal/database"
 	"github.com/google/uuid"
@@ -14,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestCreditScoringAndOverdraft guards credit scoring, overdraft limits, and campaign pause on overdraft shrink.
 func TestCreditScoringAndOverdraft(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -48,7 +48,9 @@ func TestCreditScoringAndOverdraft(t *testing.T) {
 	err := svc.CreateCustomer(ctx, customerID, "Credit Customer", 0, "USD")
 	require.NoError(t, err)
 
-	_, err = svc.CreateCampaign(ctx, customerID, nil, "Poor Campaign", 100_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "poor-idem")
+	spec := testCampaignSpec(customerID, "Poor Campaign", 100_000_000, "poor-idem")
+	spec.DaypartHours = []int16{}
+	_, err = svc.CreateCampaign(ctx, spec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient balance")
 
@@ -75,7 +77,9 @@ func TestCreditScoringAndOverdraft(t *testing.T) {
 	_, err = pool.Exec(ctx, "UPDATE customers SET balance = 0 WHERE id = $1", ads.ToUUID(customerID))
 	require.NoError(t, err)
 
-	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Credit Campaign", 200_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "credit-idem")
+	creditSpec := testCampaignSpec(customerID, "Credit Campaign", 200_000_000, "credit-idem")
+	creditSpec.DaypartHours = []int16{}
+	campaignID, err := svc.CreateCampaign(ctx, creditSpec)
 	require.NoError(t, err)
 	assert.NotEqual(t, uuid.Nil, campaignID)
 
@@ -83,11 +87,13 @@ func TestCreditScoringAndOverdraft(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(-200_000_000), balance)
 
-	_, err = svc.CreateCampaign(ctx, customerID, nil, "Excessive Campaign", 150_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "excessive-idem")
+	excessiveSpec := testCampaignSpec(customerID, "Excessive Campaign", 150_000_000, "excessive-idem")
+	excessiveSpec.DaypartHours = []int16{}
+	_, err = svc.CreateCampaign(ctx, excessiveSpec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "insufficient balance")
 
-	err = svc.UpdateOverdraft(ctx, customerID, 100_000_000, 300_000_000)
+	err = svc.UpdateOverdraft(ctx, customerID, 100_000_000)
 	require.NoError(t, err)
 
 	var campaignStatus string
@@ -104,7 +110,7 @@ func TestCreditScoringAndOverdraft(t *testing.T) {
 	assert.Equal(t, int64(100_000_000), allowedOverdraft)
 
 	var outboxCount int
-	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'CANCEL_CAMPAIGN'").Scan(&outboxCount)
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM outbox_events WHERE event_type = 'PAUSE_CAMPAIGN'").Scan(&outboxCount)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, outboxCount, 1)
 }

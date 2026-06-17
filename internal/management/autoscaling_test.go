@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestSmartBudgetAutoscaling guards CTR-based budget shifts from low to high performers without corrupting sync state.
 func TestSmartBudgetAutoscaling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -49,10 +50,10 @@ func TestSmartBudgetAutoscaling(t *testing.T) {
 	err := svc.CreateCustomer(ctx, customerID, "Smart Customer", 1_000_000_000, "USD")
 	require.NoError(t, err)
 
-	campaignA, err := svc.CreateCampaign(ctx, customerID, nil, "Low CTR Campaign", 100_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "low-idem")
+	campaignA, err := svc.CreateCampaign(ctx, testCampaignSpec(customerID, "Low CTR Campaign", 100_000_000, "low-idem"))
 	require.NoError(t, err)
 
-	campaignB, err := svc.CreateCampaign(ctx, customerID, nil, "High CTR Campaign", 100_000_000, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "high-idem")
+	campaignB, err := svc.CreateCampaign(ctx, testCampaignSpec(customerID, "High CTR Campaign", 100_000_000, "high-idem"))
 	require.NoError(t, err)
 
 	_, err = pool.Exec(ctx,
