@@ -1,3 +1,6 @@
+# datasource.yml: Grafana auto-provisions Prometheus as the default metrics backend.
+# URL points at the host-mapped Prometheus port used in docker compose monitoring profile.
+
 apiVersion: 1
 
 datasources:

@@ -1,6 +1,10 @@
+# prometheus.rules.yml: SLO and incident alerts for tracker hot path and processor cold path.
+# Rules favor actionable signals (breaker open, DLQ growth, budget miss) over raw error counts.
+
 groups:
   - name: ad-event-processor-alerts
     rules:
+      # Processor stopped writing to DB and is spilling batches to the DLQ stream.
       - alert: CircuitBreakerOpen
         expr: ad_circuit_breaker_state == 1
         for: 30s
@@ -10,6 +14,17 @@ groups:
           summary: "Circuit Breaker is OPEN"
           description: "Database write failures detected. Processor is routing event batches directly to the Dead Letter Queue (DLQ)."
 
+      # Per-shard Redis breaker open; tracker filter fast-fails with 503 until half-open probe succeeds.
+      - alert: RedisBreakerOpen
+        expr: ad_redis_breaker_state == 1
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis shard circuit breaker is OPEN"
+          description: "Shard {{ $labels.shard }} Redis circuit breaker has been open for 30s. Hot-path filter calls are fast-failing with 503."
+
+      # Sustained PG or ClickHouse write errors on the processor path.
       - alert: DatabaseWriteErrors
         expr: rate(ad_db_write_errors_total[1m]) > 0
         for: 30s
@@ -19,6 +34,7 @@ groups:
           summary: "Database write errors detected"
           description: "Processor has encountered write errors when storing event batches to PostgreSQL or ClickHouse."
 
+      # Any DLQ depth means events need operator inspect or requeue before data loss ages out.
       - alert: DeadLetterQueueSpike
         expr: ad_dlq_size_total > 0
         for: 10s
@@ -28,6 +44,7 @@ groups:
           summary: "Dead Letter Queue is not empty"
           description: "Events are active in the Dead Letter Queue. Action required to inspect and replay raw event payloads."
 
+      # End-to-end /track latency regression at the Go handler (not nginx-only).
       - alert: HighRequestLatency
         expr: histogram_quantile(0.95, sum(rate(ad_http_request_duration_seconds_bucket[5m])) by (le)) > 0.5
         for: 1m
@@ -37,6 +54,39 @@ groups:
           summary: "High HTTP request latency detected"
           description: "p95 HTTP request duration at the Go tracker edge is above 500ms."
 
+      # Lua scripts block the Redis shard; high p99 here directly caps ingest RPS per shard.
+      - alert: RedisLuaLatencyHigh
+        expr: histogram_quantile(0.99, sum(rate(ad_redis_lua_duration_seconds_bucket[5m])) by (le, shard)) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis Lua filter p99 above 10ms"
+          description: "Shard {{ $labels.shard }} unified_filter.lua p99 exceeds 10ms. Lua scripts run atomically and block the shard during execution (https://redis.io/docs/interact/programmability/eval-intro/)."
+
+      # EVALSHA miss after Redis restart; fix with SCRIPT LOAD on tracker startup.
+      - alert: RedisLuaNoScriptFallback
+        expr: rate(ad_redis_lua_noscript_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis EVALSHA NOSCRIPT fallback detected"
+          description: "Shard {{ $labels.shard }} is falling back from EVALSHA to EVAL. Run SCRIPT LOAD on startup or after Redis restart (https://redis.io/docs/interact/programmability/eval-intro/#evalsha)."
+          runbook_url: "https://github.com/mykhailov-ua/espx/blob/main/docs/development.md#redis-restart-runbook"
+
+      # unified_filter.lua never loaded on a shard; all budget checks will fail closed or error.
+      - alert: RedisLuaScriptNotLoaded
+        expr: ad_redis_lua_script_loaded == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Unified filter Lua script not loaded on shard"
+          description: "Shard {{ $labels.shard }} missing SCRIPT LOAD for unified_filter.lua."
+          runbook_url: "https://github.com/mykhailov-ua/espx/blob/main/docs/development.md#redis-restart-runbook"
+
+      # Nightly or periodic PG vs Redis ledger reconciliation worker failed.
       - alert: ReconciliationFailed
         expr: rate(ad_reconciliation_runs_total{status="failed"}[5m]) > 0
         for: 1m
@@ -46,6 +96,7 @@ groups:
           summary: "Financial reconciliation job failed"
           description: "The background reconciliation worker failed to complete a run, indicating database or Redis pool communication errors on the cold path."
 
+      # Financial drift between Postgres spend and Redis budget accumulators.
       - alert: ReconciliationDiscrepancySpike
         expr: rate(ad_reconciliation_discrepancies_total[5m]) > 5
         for: 1m
@@ -54,3 +105,110 @@ groups:
         annotations:
           summary: "High number of financial discrepancies detected"
           description: "Automated reconciliation detected more than 5 campaign financial discrepancies in the last 5 minutes. Audit trails and ledger logs should be inspected for edge sync anomalies."
+
+      # Hot path fell through to Postgres for budget because Redis key was cold or evicted.
+      - alert: BudgetCacheMissPG
+        expr: rate(ad_budget_cache_miss_pg_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Budget cache miss falling through to PostgreSQL"
+          description: "Hot-path unified filter resolved budget keys via PostgreSQL GetByID. Redis warm path is stale or keys were evicted."
+
+      # Sustained Lua budget miss ratio; warmer or registry sync is behind ingest.
+      - alert: BudgetCacheMissRatioHigh
+        expr: |
+          sum(rate(ad_budget_cache_miss_total[5m]))
+          /
+          clamp_min(sum(rate(ad_http_requests_total[5m])), 0.001)
+          > 0.001
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Budget cache miss ratio above 0.1%"
+          description: "Lua budget key miss rate (return -1) exceeds 0.1% of HTTP request rate. Check registry sync lag and budget warmer."
+
+      # Audit log ring buffer saturated; sampled audit trail is being dropped on accept path.
+      - alert: HandlerLogDrop
+        expr: rate(ad_handler_log_drop_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit log writes dropped on hot path"
+          description: "Accepted events had audit log writes dropped because the logger ring buffer is full. Increase ring capacity, tighten AUDIT_LOG_SAMPLE_RATE (default 127 = 1/128 impressions), or reduce log volume."
+
+      # Pinned worker pool queue full; tracker is actively shedding load.
+      - alert: WorkerPoolReject
+        expr: rate(ad_worker_pool_reject_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pinned worker pool rejecting requests"
+          description: "Requests rejected because the pinned worker pool queue is full. Hot-path backpressure is active; scale workers or reduce ingress."
+
+      # Unhandled panics or filter bugs surfacing as 500 on /track.
+      - alert: HTTP500RateHigh
+        expr: sum(rate(ad_http_requests_total{status="500"}[5m])) > 0.001
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP 500 error rate above threshold"
+          description: "Internal server error rate on /track exceeds 0.001 req/s. Inspect tracker logs and recent deploys."
+
+      # Upstream or worker saturation causing gateway timeouts at the edge.
+      - alert: HTTP504RateHigh
+        expr: sum(rate(ad_http_requests_total{status="504"}[5m])) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP 504 gateway timeout rate above threshold"
+          description: "Gateway timeout rate on /track exceeds 0.01 req/s. Check upstream latency and worker pool saturation."
+
+      # MaxMind lookup failures spiked vs prior hour or absolute error budget.
+      - alert: FilterGeoLookupErrorSpike
+        expr: |
+          sum(rate(ad_filter_internal_errors_total{kind="geo_lookup"}[5m])) > 0
+          and
+          (
+            sum(rate(ad_filter_internal_errors_total{kind="geo_lookup"}[5m]))
+            >
+            10 * sum(rate(ad_filter_internal_errors_total{kind="geo_lookup"}[1h] offset 1h))
+            or
+            sum(increase(ad_filter_internal_errors_total{kind="geo_lookup"}[5m])) > 50
+          )
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Geo lookup error spike in filter engine"
+          description: "Geo provider failures spiked relative to the prior hour baseline or exceeded 50 errors in 5m. Check MaxMind DB freshness and ad_geo_provider_status."
+
+      # Geo filter latency regression; often mmdb mount or campaign geo targeting share shift.
+      - alert: FilterGeoLatencyHigh
+        expr: histogram_quantile(0.99, sum(rate(ad_filter_geo_duration_seconds_bucket[5m])) by (le)) > 0.00001
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Geo filter p99 above 10us"
+          description: "MaxMind country lookup p99 exceeds 10us on sampled observations. Review TargetCountries campaign share and mmdb mount."
+
+      # Clicks accepted without impression timestamp while TTC fail-open is enabled.
+      - alert: TTCBypassRateHigh
+        expr: |
+          sum(rate(ad_ttc_bypass_total[5m]))
+          /
+          clamp_min(sum(rate(ad_http_requests_total{path="/track"}[5m])), 0.001)
+          > 0.01
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TTC fail-open bypass rate above 1%"
+          description: "More than 1% of /track requests are clicks accepted without impression timestamp (Redis imp_ts missing). Review Redis health before enabling TTC_FAIL_CLOSED."

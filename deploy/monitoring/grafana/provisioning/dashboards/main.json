@@ -1,9 +1,10 @@
 {
+  "description": "Primary ops dashboard for tracker ingest, processor lag, Redis Lua health, budget cache, and DLQ. Scrapes four tracker replicas and one processor.",
   "annotations": {
     "list": [
       {
         "builtIn": 1,
-        "datasource": "-- Grafana --",
+        "datasource": "Grafana",
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -104,6 +105,7 @@
         }
       ],
       "title": "Ingestion Throughput (RPS)",
+      "description": "Sum of /track request rate across all tracker scrape targets.",
       "type": "timeseries"
     },
     {
@@ -232,6 +234,7 @@
         }
       ],
       "title": "Tracker HTTP Latency (p95 / p99)",
+      "description": "Handler-side latency histogram; use with nginx timing to separate edge vs Go time.",
       "type": "timeseries"
     },
     {
@@ -319,6 +322,7 @@
         }
       ],
       "title": "Stream & DB Processing Rate",
+      "description": "Redis stream consumer throughput into Postgres and ClickHouse on the processor.",
       "type": "timeseries"
     },
     {
@@ -448,6 +452,7 @@
         }
       ],
       "title": "Database Write Batch Latency (ClickHouse/PG)",
+      "description": "Batch flush duration for cold-path stores; spikes often precede DLQ growth.",
       "type": "timeseries"
     },
     {
@@ -535,6 +540,7 @@
         }
       ],
       "title": "Dead Letter Queue (DLQ) Size",
+      "description": "Non-zero means processor could not commit batches; inspect with cmd/dlq.",
       "type": "timeseries"
     },
     {
@@ -622,6 +628,348 @@
         }
       ],
       "title": "Dropped Events Rate",
+      "description": "Events rejected before accept (validation, breaker, pool reject).",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "Latency (ms)",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum(rate(ad_redis_lua_duration_seconds_bucket{job=\"tracker\"}[5m])) by (le, shard)) * 1000",
+          "legendFormat": "p99 shard={{shard}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Redis Lua Filter p99 (per shard)",
+      "description": "Per-shard unified_filter.lua latency; Lua blocks the Redis core while running.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisLabel": "Misses / sec",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "PG fallback"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#EF4444",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(ad_budget_cache_miss_total{job=\"tracker\"}[5m])",
+          "legendFormat": "Lua miss",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(ad_budget_cache_miss_pg_total{job=\"tracker\"}[5m])",
+          "legendFormat": "PG fallback",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(ad_budget_cache_miss_total{job=\"tracker\"}[5m])) / clamp_min(sum(rate(ad_http_requests_total{job=\"tracker\"}[5m])), 0.001)",
+          "legendFormat": "miss ratio",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Budget Cache Miss (Lua / PG / ratio)",
+      "description": "Redis budget key misses and Postgres fallbacks; indicates warmer or sync lag.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "axisLabel": "State",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 30,
+            "gradientMode": "scheme",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "area"
+            }
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "green",
+                  "index": 0,
+                  "text": "closed"
+                },
+                "1": {
+                  "color": "red",
+                  "index": 1,
+                  "text": "open"
+                },
+                "2": {
+                  "color": "yellow",
+                  "index": 2,
+                  "text": "half-open"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "max": 2,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "id": 10,
+      "options": {
+        "legend": {
+          "calcs": ["lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "expr": "ad_redis_breaker_state{job=\"tracker\"}",
+          "legendFormat": "shard={{shard}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "editorMode": "code",
+          "expr": "ad_redis_lua_script_loaded{job=\"tracker\"}",
+          "legendFormat": "lua_loaded shard={{shard}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Redis Breaker State & Lua Script Loaded (per shard)",
+      "description": "Shard breaker open (1) and SCRIPT LOAD status; cross-check after Redis restart.",
       "type": "timeseries"
     }
   ],
@@ -641,5 +989,5 @@
   "timezone": "browser",
   "title": "Ad Event Processor - High Throughput Telemetry",
   "uid": "perf-overview",
-  "version": 2
+  "version": 3
 }

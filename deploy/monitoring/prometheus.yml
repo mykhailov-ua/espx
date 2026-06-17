@@ -1,3 +1,6 @@
+# prometheus.yml: scrape targets for tracker replicas and the processor cold path.
+# Evaluation interval matches scrape so alert rules see fresh samples.
+
 global:
   scrape_interval: 5s      # tracker hot-path counters are updated at ~1 ms granularity; 5s gives adequate resolution
   evaluation_interval: 5s  # alert rule evaluation period; match scrape interval to prevent stale data in conditions
