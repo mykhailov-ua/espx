@@ -11,12 +11,14 @@ import (
 	"sync"
 )
 
+// dbExecutor is the minimal SQL surface PartitionManager needs so tests can mock partition DDL.
 type dbExecutor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// PartitionManager keeps the events table partitioned ahead of ingest so rows never pile into events_default.
 type PartitionManager struct {
 	pool      dbExecutor
 	retention int
@@ -24,6 +26,7 @@ type PartitionManager struct {
 	wg        sync.WaitGroup
 }
 
+// NewPartitionManager configures retention and lookahead windows for daily event partitions.
 func NewPartitionManager(pool dbExecutor, retentionDays int, preCreateDays int) *PartitionManager {
 	return &PartitionManager{
 		pool:      pool,
@@ -32,8 +35,8 @@ func NewPartitionManager(pool dbExecutor, retentionDays int, preCreateDays int) 
 	}
 }
 
+// Run pre-creates upcoming partitions and drops expired ones so event inserts always hit a dated child table.
 func (pm *PartitionManager) Run(ctx context.Context) error {
-	// Truncate events_default first; leftover rows cause partition constraint violations.
 	if err := pm.truncateDefault(ctx); err != nil {
 		slog.Warn("failed to truncate events_default before partition creation", "error", err)
 	}
@@ -57,6 +60,7 @@ func (pm *PartitionManager) Run(ctx context.Context) error {
 	return nil
 }
 
+// createPartition adds one daily child table for the events range partition set.
 func (pm *PartitionManager) createPartition(ctx context.Context, date time.Time) error {
 	tableName := fmt.Sprintf("events_p%s", date.Format("2006_01_02"))
 	startDate := date.Format("2006-01-02")
@@ -73,6 +77,7 @@ func (pm *PartitionManager) createPartition(ctx context.Context, date time.Time)
 	return err
 }
 
+// dropPartitions removes partitions outside retention and pre-create windows to control disk growth.
 func (pm *PartitionManager) dropPartitions(ctx context.Context, now time.Time, olderThan time.Time) error {
 	query := `
 		SELECT child.relname
@@ -120,6 +125,7 @@ func (pm *PartitionManager) dropPartitions(ctx context.Context, now time.Time, o
 	return nil
 }
 
+// truncateDefault clears the catch-all partition so stray rows do not block creation of dated child tables.
 func (pm *PartitionManager) truncateDefault(ctx context.Context) error {
 	var count int64
 	err := pm.pool.QueryRow(ctx, "SELECT count(*) FROM events_default").Scan(&count)
@@ -141,6 +147,7 @@ func (pm *PartitionManager) truncateDefault(ctx context.Context) error {
 	return nil
 }
 
+// StartBackground runs partition maintenance on startup and hourly so ingest never outruns partition coverage.
 func (pm *PartitionManager) StartBackground(ctx context.Context) {
 	pm.wg.Add(1)
 	go func() {
@@ -165,6 +172,7 @@ func (pm *PartitionManager) StartBackground(ctx context.Context) {
 	}()
 }
 
+// Wait blocks until the background partition worker exits or the context is cancelled.
 func (pm *PartitionManager) Wait(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {

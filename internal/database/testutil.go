@@ -17,6 +17,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// SetupTestDB exists so integration tests get a migrated Postgres instance without bespoke container wiring.
 func SetupTestDB(t testing.TB) (*pgxpool.Pool, func()) {
 	ctx := context.Background()
 
@@ -80,6 +81,7 @@ func SetupTestDB(t testing.TB) (*pgxpool.Pool, func()) {
 	}
 }
 
+// SetupTestRedis exists so integration tests get an isolated Redis instance without shared dev dependencies.
 func SetupTestRedis(t testing.TB) (redis.UniversalClient, func()) {
 	ctx := context.Background()
 

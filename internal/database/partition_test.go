@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
+// MockDB exists so partition maintenance tests can assert DDL without a live Postgres server.
 type MockDB struct {
 	mock.Mock
 }
@@ -68,6 +69,7 @@ func (m *MockRows) Scan(dest ...any) error {
 func (m *MockRows) Close()     {}
 func (m *MockRows) Err() error { return nil }
 
+// TestPartitionManager_Cleanup guards retention and lookahead windows drop only out-of-range event partitions.
 func TestPartitionManager_Cleanup(t *testing.T) {
 	mockDB := new(MockDB)
 	pm := NewPartitionManager(mockDB, 7, 2)
