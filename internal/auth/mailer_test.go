@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestSlogMailer_AllTemplates ensures every notification template renders without error in the log mailer.
 func TestSlogMailer_AllTemplates(t *testing.T) {
 	mailer := SlogMailer{}
 	ctx := context.Background()
