@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestManagementAPI_Campaigns guards campaign list, detail, history, isolation, and async cancel endpoints.
 func TestManagementAPI_Campaigns(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -43,20 +44,18 @@ func TestManagementAPI_Campaigns(t *testing.T) {
 	err := svc.CreateCustomer(context.Background(), custID, "Advertiser", 500_000_000, "USD")
 	require.NoError(t, err)
 
-	campID, err := svc.CreateCampaign(
-		context.Background(),
-		custID,
-		nil,
-		"Spring Sale",
-		100_000_000,
-		db.PacingModeTypeEVEN,
-		10_000_000,
-		"UTC",
-		5,
-		3600,
-		[]string{"US", "GB"},
-		"idemp-camp-1",
-	)
+	campID, err := svc.CreateCampaign(context.Background(), CampaignCreateSpec{
+		CustomerID:      custID,
+		Name:            "Spring Sale",
+		BudgetLimit:     100_000_000,
+		PacingMode:      db.PacingModeTypeEVEN,
+		DailyBudget:     10_000_000,
+		Timezone:        "UTC",
+		FreqLimit:       5,
+		FreqWindow:      3600,
+		TargetCountries: []string{"US", "GB"},
+		IdempotencyKey:  "idemp-camp-1",
+	})
 	require.NoError(t, err)
 
 	t.Run("ListCampaigns", func(t *testing.T) {
@@ -126,7 +125,7 @@ func TestManagementAPI_Campaigns(t *testing.T) {
 
 		user := AuthenticatedUser{
 			UserID:     uuid.New(),
-			Role:       "C",
+			Role:       RoleUser,
 			CustomerID: otherCustID,
 		}
 		ctx := context.WithValue(req.Context(), UserContextKey, user)

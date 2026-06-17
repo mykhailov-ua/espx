@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestManagementQueries guards sqlc management queries create customers and campaigns correctly.
 func TestManagementQueries(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -42,14 +43,17 @@ func TestManagementQueries(t *testing.T) {
 
 	campaignID := uuid.New()
 	camp, err := queries.CreateCampaign(ctx, db.CreateCampaignParams{
-		ID:          pgtype.UUID{Bytes: campaignID, Valid: true},
-		Name:        "Management Test Campaign",
-		BudgetLimit: 100_000_000,
-		Status:      db.CampaignStatusTypeACTIVE,
-		CustomerID:  pgtype.UUID{Bytes: customerID, Valid: true},
-		PacingMode:  db.PacingModeTypeASAP,
-		DailyBudget: 0,
-		Timezone:    "UTC",
+		ID:           pgtype.UUID{Bytes: campaignID, Valid: true},
+		Name:         "Management Test Campaign",
+		BudgetLimit:  100_000_000,
+		Status:       db.CampaignStatusTypeACTIVE,
+		CustomerID:   pgtype.UUID{Bytes: customerID, Valid: true},
+		PacingMode:   db.PacingModeTypeASAP,
+		DailyBudget:  0,
+		Timezone:     "UTC",
+		FreqLimit:    pgtype.Int4{Int32: 0, Valid: true},
+		FreqWindow:   pgtype.Int4{Int32: 86400, Valid: true},
+		DaypartHours: []int16{},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, campaignID, uuid.UUID(camp.ID.Bytes))

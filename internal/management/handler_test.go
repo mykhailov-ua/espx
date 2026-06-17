@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestManagementAPI_Hardening guards auth on settings, successful writes, audit listing, and rate limiting.
 func TestManagementAPI_Hardening(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -68,8 +69,10 @@ func TestManagementAPI_Hardening(t *testing.T) {
 		mux.ServeHTTP(resp, req)
 		assert.Equal(t, http.StatusCreated, resp.Code)
 
-		isMember, _ := rdb.SIsMember(context.Background(), "blacklist:manual", "9.9.9.9").Result()
-		assert.True(t, isMember)
+		assert.Eventually(t, func() bool {
+			isMember, _ := rdb.SIsMember(context.Background(), "blacklist:manual", "9.9.9.9").Result()
+			return isMember
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 
 	t.Run("ListAudit", func(t *testing.T) {

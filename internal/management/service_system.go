@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// BlacklistDTO exposes blocked IP entries to the admin API.
 type BlacklistDTO struct {
 	ID        int64  `json:"id"`
 	IP        string `json:"ip"`
@@ -19,13 +20,11 @@ type BlacklistDTO struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// BlockIP persists a blacklist entry and propagates it to Redis and nginx via outbox.
 func (s *Service) BlockIP(ctx context.Context, ip string, source string) error {
-	reason := source
-	if reason == "" {
-		reason = "manual"
-	}
+	reason := normalizeBlacklistReason(source)
 
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		_, err := q.CreateBlacklistIP(ctx, db.CreateBlacklistIPParams{
 			Ip:     ip,
@@ -40,31 +39,21 @@ func (s *Service) BlockIP(ctx context.Context, ip string, source string) error {
 			uid = u.UserID
 		}
 		s.AuditLog(ctx, q, uid, "BLOCK_IP", "system", nil, map[string]string{"ip": ip, "source": reason}, nil)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
 
-	if len(s.rdbs) == 0 {
-		return fmt.Errorf("no redis client available")
-	}
-	var lastErr error
-	for _, rdb := range s.rdbs {
-		if err := rdb.SAdd(ctx, "blacklist:"+reason, ip).Err(); err != nil {
-			lastErr = err
-		}
-	}
-	return lastErr
+		payload, _ := json.Marshal(BlacklistPayload{Action: "add", IP: ip, Reason: reason})
+		_, err = q.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{
+			EventType: "UPDATE_BLACKLIST",
+			Payload:   payload,
+		})
+		return err
+	})
 }
 
+// UnblockIP removes a blacklist entry and propagates the change to Redis and nginx via outbox.
 func (s *Service) UnblockIP(ctx context.Context, ip string, source string) error {
-	reason := source
-	if reason == "" {
-		reason = "manual"
-	}
+	reason := normalizeBlacklistReason(source)
 
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		err := q.DeleteBlacklistIP(ctx, ip)
 		if err != nil {
@@ -76,24 +65,17 @@ func (s *Service) UnblockIP(ctx context.Context, ip string, source string) error
 			uid = u.UserID
 		}
 		s.AuditLog(ctx, q, uid, "UNBLOCK_IP", "system", nil, map[string]string{"ip": ip, "source": reason}, nil)
-		return nil
-	})
-	if err != nil {
-		return err
-	}
 
-	if len(s.rdbs) == 0 {
-		return fmt.Errorf("no redis client available")
-	}
-	var lastErr error
-	for _, rdb := range s.rdbs {
-		if err := rdb.SRem(ctx, "blacklist:"+reason, ip).Err(); err != nil {
-			lastErr = err
-		}
-	}
-	return lastErr
+		payload, _ := json.Marshal(BlacklistPayload{Action: "remove", IP: ip, Reason: reason})
+		_, err = q.CreateOutboxEvent(ctx, db.CreateOutboxEventParams{
+			EventType: "UPDATE_BLACKLIST",
+			Payload:   payload,
+		})
+		return err
+	})
 }
 
+// UpdateSettings persists system configuration and queues a hot-path sync via outbox.
 func (s *Service) UpdateSettings(ctx context.Context, settings map[string]string) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
@@ -118,6 +100,7 @@ func (s *Service) UpdateSettings(ctx context.Context, settings map[string]string
 	})
 }
 
+// ListBlacklist returns paginated blocked IPs for the admin UI.
 func (s *Service) ListBlacklist(ctx context.Context, limit, offset int32) ([]BlacklistDTO, int64, error) {
 	q := db.New(s.pool)
 	total, err := q.CountBlacklist(ctx)
@@ -145,6 +128,7 @@ func (s *Service) ListBlacklist(ctx context.Context, limit, offset int32) ([]Bla
 	return res, total, nil
 }
 
+// GetSettings loads all system settings from Postgres for the admin API.
 func (s *Service) GetSettings(ctx context.Context) (map[string]string, error) {
 	q := db.New(s.pool)
 	rows, err := q.GetAllSystemSettings(ctx)
@@ -158,6 +142,7 @@ func (s *Service) GetSettings(ctx context.Context) (map[string]string, error) {
 	return res, nil
 }
 
+// SyncSystemState pushes authoritative blacklist and settings snapshots from Postgres to all Redis shards.
 func (s *Service) SyncSystemState(ctx context.Context) error {
 	q := db.New(s.pool)
 
@@ -170,13 +155,23 @@ func (s *Service) SyncSystemState(ctx context.Context) error {
 		return fmt.Errorf("no redis client available")
 	}
 
+	reasonIPs := make(map[string][]any)
 	for _, item := range bl {
-		reason := item.Reason
-		if reason == "" {
-			reason = "manual"
-		}
+		reason := normalizeBlacklistReason(item.Reason)
+		reasonIPs[reason] = append(reasonIPs[reason], item.Ip)
+	}
+
+	for reason, ips := range reasonIPs {
+		key := "blacklist:" + reason
 		for _, rdb := range s.rdbs {
-			rdb.SAdd(ctx, "blacklist:"+reason, item.Ip)
+			if err := rdb.Del(ctx, key).Err(); err != nil {
+				return fmt.Errorf("failed to reset blacklist key %s: %w", key, err)
+			}
+			if len(ips) > 0 {
+				if err := rdb.SAdd(ctx, key, ips...).Err(); err != nil {
+					return fmt.Errorf("failed to sync blacklist key %s: %w", key, err)
+				}
+			}
 		}
 	}
 
@@ -190,13 +185,16 @@ func (s *Service) SyncSystemState(ctx context.Context) error {
 		for _, r := range st {
 			settingsMap[r.Key] = r.Value
 		}
-		s.rdbs[0].HSet(ctx, "config:values", settingsMap)
+		if err := s.rdbs[0].HSet(ctx, "config:values", settingsMap).Err(); err != nil {
+			return fmt.Errorf("failed to sync settings to redis: %w", err)
+		}
 	}
 
 	slog.Info("system state synchronized with redis successfully", "blacklist_items", len(bl), "settings_items", len(st))
 	return nil
 }
 
+// RunSystemStateSyncer periodically reconciles Redis with Postgres so edge nodes recover after restarts.
 func (s *Service) RunSystemStateSyncer(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -215,6 +213,7 @@ func (s *Service) RunSystemStateSyncer(ctx context.Context) {
 	}
 }
 
+// ToggleEmergencyBreaker flips the global kill switch and propagates it to the hot path via outbox.
 func (s *Service) ToggleEmergencyBreaker(ctx context.Context, active bool, reason string) error {
 	val := "false"
 	if active {

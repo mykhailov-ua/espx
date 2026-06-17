@@ -13,12 +13,16 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// ClosedLoopPacingController switches campaigns between ASAP and EVEN when spend diverges from the daily curve.
 func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []*ads.SyncWorker) error {
+	opCtx, cancel := workerContext(ctx, workerBatchTimeout)
+	defer cancel()
+
 	for _, sw := range syncWorkers {
-		sw.SyncAll(ctx)
+		sw.SyncAll(opCtx)
 	}
 
-	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	return pgx.BeginFunc(opCtx, s.pool, func(tx pgx.Tx) error {
 		q := db.New(tx)
 		rows, err := q.GetAllActiveCampaignsWithStats(ctx)
 		if err != nil {
@@ -27,16 +31,24 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 
 		now := time.Now()
 		for _, row := range rows {
+			camp, err := q.GetCampaignForUpdate(ctx, row.ID)
+			if err != nil {
+				return fmt.Errorf("failed to lock campaign for pacing: %w", err)
+			}
+			if camp.Status != db.CampaignStatusTypeACTIVE {
+				continue
+			}
+
 			var loc *time.Location
-			if cached, found := s.locCache.Load(row.Timezone); found {
+			if cached, found := s.locCache.Load(camp.Timezone); found {
 				loc = cached.(*time.Location)
 			} else {
 				var err error
-				loc, err = time.LoadLocation(row.Timezone)
+				loc, err = time.LoadLocation(camp.Timezone)
 				if err != nil {
 					loc = time.UTC
 				}
-				s.locCache.Store(row.Timezone, loc)
+				s.locCache.Store(camp.Timezone, loc)
 			}
 			localNow := now.In(loc)
 
@@ -51,15 +63,15 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 				timeRatio = 1.0
 			}
 
-			budgetMicro := row.DailyBudget
+			budgetMicro := camp.DailyBudget
 			if budgetMicro == 0 {
-				budgetMicro = row.BudgetLimit
+				budgetMicro = camp.BudgetLimit
 			}
 			if budgetMicro == 0 {
 				continue
 			}
 
-			actualSpendMicro := row.CurrentSpend
+			actualSpendMicro := camp.CurrentSpend
 			expectedSpendMicro := int64(float64(budgetMicro) * timeRatio)
 
 			var targetPacing db.PacingModeType
@@ -68,18 +80,18 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 			overThresholdMicro := int64(float64(expectedSpendMicro) * (1.0 + s.cfg.PacingToleranceMargin))
 			underThresholdMicro := int64(float64(expectedSpendMicro) * (1.0 - s.cfg.PacingToleranceMargin))
 
-			if row.PacingMode == db.PacingModeTypeASAP && actualSpendMicro > overThresholdMicro {
+			if camp.PacingMode == db.PacingModeTypeASAP && actualSpendMicro > overThresholdMicro {
 				targetPacing = db.PacingModeTypeEVEN
 				shouldUpdate = true
-			} else if row.PacingMode == db.PacingModeTypeEVEN && actualSpendMicro < underThresholdMicro {
+			} else if camp.PacingMode == db.PacingModeTypeEVEN && actualSpendMicro < underThresholdMicro {
 				targetPacing = db.PacingModeTypeASAP
 				shouldUpdate = true
 			}
 
 			if shouldUpdate {
-				campID := uuid.UUID(row.ID.Bytes)
+				campID := uuid.UUID(camp.ID.Bytes)
 				_, err = q.UpdateCampaignPacing(ctx, db.UpdateCampaignPacingParams{
-					ID:         row.ID,
+					ID:         camp.ID,
 					PacingMode: targetPacing,
 				})
 				if err != nil {
@@ -90,7 +102,7 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 				expectedSpendStr := fmt.Sprintf("%.2f", float64(expectedSpendMicro)/1_000_000.0)
 
 				s.AuditLog(ctx, q, uuid.Nil, "PACING_LOOP_ADJUSTMENT", "campaign", &campID, map[string]any{
-					"old_pacing": string(row.PacingMode),
+					"old_pacing": string(camp.PacingMode),
 					"new_pacing": string(targetPacing),
 					"spend":      actualSpendStr,
 					"expected":   expectedSpendStr,
@@ -114,7 +126,7 @@ func (s *Service) ClosedLoopPacingController(ctx context.Context, syncWorkers []
 
 				slog.Info("closed-loop pacing controller adjusted pacing",
 					"campaign_id", campID,
-					"old_pacing", row.PacingMode,
+					"old_pacing", camp.PacingMode,
 					"new_pacing", targetPacing,
 					"actual_spend", actualSpendStr,
 					"expected_spend", expectedSpendStr,

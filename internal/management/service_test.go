@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"espx/internal/ads"
-	"espx/internal/ads/db"
 	"espx/internal/config"
 	"espx/internal/database"
 	"github.com/google/uuid"
@@ -15,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestManagementService_CancelCampaign guards cancel applies fee, refunds remainder, and marks campaign deleted.
 func TestManagementService_CancelCampaign(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -44,7 +44,7 @@ func TestManagementService_CancelCampaign(t *testing.T) {
 	require.NoError(t, err)
 
 	budget := int64(500_000_000)
-	campaignID, err := svc.CreateCampaign(ctx, customerID, nil, "Test Campaign", budget, db.PacingModeTypeASAP, 0, "UTC", 0, 0, nil, "idemp-1")
+	campaignID, err := svc.CreateCampaign(ctx, testCampaignSpec(customerID, "Test Campaign", budget, "idemp-1"))
 	require.NoError(t, err)
 
 	_, _ = pool.Exec(ctx, "UPDATE campaigns SET current_spend = $1 WHERE id = $2", int64(200_000_000), campaignID)
@@ -64,6 +64,7 @@ func TestManagementService_CancelCampaign(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
+// TestManagementService_Idempotency guards duplicate top-up idempotency keys do not double-credit balance.
 func TestManagementService_Idempotency(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestManagementAPI_Robustness guards malformed input, DB failures, worker shutdown, and pagination limits.
 func TestManagementAPI_Robustness(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")

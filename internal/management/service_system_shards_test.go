@@ -3,6 +3,7 @@ package management
 import (
 	"context"
 	"testing"
+	"time"
 
 	"espx/internal/database"
 	"github.com/redis/go-redis/v9"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestBlockIP_MultipleShards guards block, unblock, and sync propagate to every Redis shard.
 func TestBlockIP_MultipleShards(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -53,22 +55,30 @@ func TestBlockIP_MultipleShards(t *testing.T) {
 		err := svc.BlockIP(ctx, testIP, "manual")
 		require.NoError(t, err)
 
-		for i, rdb := range []redis.UniversalClient{rdb1, rdb2, rdb3} {
-			isMember, err := rdb.SIsMember(ctx, "blacklist:manual", testIP).Result()
-			require.NoError(t, err)
-			assert.True(t, isMember, "IP should be blocked on shard %d", i+1)
-		}
+		assert.Eventually(t, func() bool {
+			for _, rdb := range []redis.UniversalClient{rdb1, rdb2, rdb3} {
+				isMember, err := rdb.SIsMember(ctx, "blacklist:manual", testIP).Result()
+				if err != nil || !isMember {
+					return false
+				}
+			}
+			return true
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 
 	t.Run("UnblockIP on all shards", func(t *testing.T) {
 		err := svc.UnblockIP(ctx, testIP, "manual")
 		require.NoError(t, err)
 
-		for i, rdb := range []redis.UniversalClient{rdb1, rdb2, rdb3} {
-			isMember, err := rdb.SIsMember(ctx, "blacklist:manual", testIP).Result()
-			require.NoError(t, err)
-			assert.False(t, isMember, "IP should be unblocked on shard %d", i+1)
-		}
+		assert.Eventually(t, func() bool {
+			for _, rdb := range []redis.UniversalClient{rdb1, rdb2, rdb3} {
+				isMember, err := rdb.SIsMember(ctx, "blacklist:manual", testIP).Result()
+				if err != nil || isMember {
+					return false
+				}
+			}
+			return true
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 
 	t.Run("SyncSystemState on all shards", func(t *testing.T) {

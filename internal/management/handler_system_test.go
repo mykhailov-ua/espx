@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestManagementAPI_System guards settings and blacklist write cycles propagate to Redis.
 func TestManagementAPI_System(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -79,9 +80,10 @@ func TestManagementAPI_System(t *testing.T) {
 		mux.ServeHTTP(resp, req)
 		assert.Equal(t, http.StatusCreated, resp.Code)
 
-		isMember, err := rdb.SIsMember(context.Background(), "blacklist:fraud", "192.168.1.50").Result()
-		require.NoError(t, err)
-		assert.True(t, isMember)
+		assert.Eventually(t, func() bool {
+			isMember, err := rdb.SIsMember(context.Background(), "blacklist:fraud", "192.168.1.50").Result()
+			return err == nil && isMember
+		}, 2*time.Second, 20*time.Millisecond)
 
 		reqList, _ := http.NewRequest("GET", "/admin/blacklist", nil)
 		reqList.Header.Set("X-Admin-API-Key", "test-secret")
@@ -91,7 +93,7 @@ func TestManagementAPI_System(t *testing.T) {
 		assert.NotEmpty(t, respList.Header().Get("X-Total-Count"))
 
 		var bl []BlacklistDTO
-		err = json.NewDecoder(respList.Body).Decode(&bl)
+		err := json.NewDecoder(respList.Body).Decode(&bl)
 		require.NoError(t, err)
 		require.NotEmpty(t, bl)
 		assert.Equal(t, "192.168.1.50", bl[0].IP)
@@ -106,8 +108,9 @@ func TestManagementAPI_System(t *testing.T) {
 		mux.ServeHTTP(respDel, reqDel)
 		assert.Equal(t, http.StatusNoContent, respDel.Code)
 
-		isMember, err = rdb.SIsMember(context.Background(), "blacklist:fraud", "192.168.1.50").Result()
-		require.NoError(t, err)
-		assert.False(t, isMember)
+		assert.Eventually(t, func() bool {
+			isMember, err := rdb.SIsMember(context.Background(), "blacklist:fraud", "192.168.1.50").Result()
+			return err == nil && !isMember
+		}, 2*time.Second, 20*time.Millisecond)
 	})
 }
